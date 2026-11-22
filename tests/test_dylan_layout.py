@@ -130,6 +130,29 @@ class DylanLayoutTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             preview.parse_cells('Z9:A1')
 
+    def test_confirmed_regions_are_9x8_and_fully_visible(self):
+        with patch.object(dylan_layout, 'source_dimensions', return_value=(1920, 1080)):
+            live = dylan_layout.facecam_box('s.mp4', 0, 30, video_id='xFcI47X15Lo')
+            best = dylan_layout.facecam_box('s.mp4', 0, 30, video_id='i1zUT_gKQzA')
+            default = dylan_layout.facecam_box('s.mp4', 0, 30)
+        self.assertEqual(live, (1316, 0, 604, 537))
+        self.assertEqual(default, live)
+        self.assertEqual(best, (1200, 0, 640, 569))
+        for box in (live, best):
+            self.assertLessEqual(box[0] + box[2], 1920)
+            visible = dylan_layout.visible_source_box(box)
+            self.assertLess(abs(visible[0] - box[0]), 1.5)
+            self.assertLess(abs(visible[2] - box[2]), 1.5)
+
+    def test_compose_filter_passes_video_id_to_facecam_box(self):
+        profile = get_profile('dylan_page')
+        with patch.object(dylan_layout, 'adaptive_keys', return_value=[(0, 0.5), (1, 0.5)]), \
+                patch.object(dylan_layout, 'source_dimensions', return_value=(1920, 1080)):
+            graph, adaptive = render.compose_filter(
+                profile, 'cap.ass', 's.mp4', 0.0, 30.0, video_id='i1zUT_gKQzA')
+        self.assertTrue(adaptive)
+        self.assertIn('[face]crop=640:569:1200:0,', graph)
+
     def test_preview_parses_pixel_region(self):
         from campaign import top_panel_preview as preview
         self.assertEqual(preview.parse_region('960, 0, 960, 540'), (0.5, 0.0, 0.5, 0.5))

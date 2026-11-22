@@ -67,13 +67,14 @@ def build_filter(ass_name, logo_supported=True):
             "[captioned][logo]overlay=0:24:shortest=0[out]")
 
 
-def compose_filter(profile, ass_name, media_path, start, length, has_logo=False):
+def compose_filter(profile, ass_name, media_path, start, length, has_logo=False,
+                   video_id=None):
     """Return ``(filtergraph, adaptive_used)`` for exactly one campaign profile."""
     if profile.video.layout in ("adaptive-face", "adaptive-stacked") and not has_logo:
         keys = dylan_layout.adaptive_keys(media_path, start, length)
         if keys:
             if profile.video.layout == "adaptive-stacked":
-                box = dylan_layout.facecam_box(media_path, start, length)
+                box = dylan_layout.facecam_box(media_path, start, length, video_id=video_id)
                 if box:
                     return dylan_layout.build_stacked_filter(ass_name, box), True
             else:
@@ -110,7 +111,8 @@ def render_candidate(src, media_path, candidate, logo, out_dir, spoken_language=
     # forbids added branding, so this stays None for that profile.
     has_logo = bool(profile.editing.logo_required and logo) and os.path.isfile(logo)
     filtergraph, adaptive = compose_filter(profile, os.path.basename(ass_path),
-                                           media_path, start, length, has_logo)
+                                           media_path, start, length, has_logo,
+                                           video_id=src.key)
     margin = clip.caption_margin_for_video(media_path, crop=adaptive, source_roi=None)
     clip.write_ass(ass_path, words, start, length, credit=None, caption_margin_v=margin)
     write_srt(srt, words, start, length)
@@ -162,6 +164,9 @@ def render_candidate(src, media_path, candidate, logo, out_dir, spoken_language=
                      else "fit-fallback" if profile.video.layout in ("adaptive-face", "adaptive-stacked")
                      else "fit"),
             "identity_verified": False,
+            "top_panel_region": (list(dylan_layout.facebox_region(src.key))
+                                 if adaptive and profile.video.layout == "adaptive-stacked"
+                                 else None),
             "note": ("tight fixed facecam panel over wide gameplay; manual identity/focus review required"
                      if adaptive and profile.video.layout == "adaptive-stacked"
                      else "face-position crop; manual identity/focus review required" if adaptive

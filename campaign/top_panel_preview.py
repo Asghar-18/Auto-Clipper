@@ -1,7 +1,8 @@
 """Dylan top-panel preview sheet (review aid only; renders nothing publishable).
 
 For each source frame it draws an 8x8 labeled grid (rows A-H, columns 1-8,
-each cell 1/8 of the frame), a red outline of the configured FACEBOX_REGION,
+each cell 1/8 of the frame), a red outline of the configured region (the
+per-video override when one exists, else FACEBOX_REGION),
 and a green outline of the part that actually appears in the 1080x960 top
 panel. Beside the frame it shows the real top-panel output, built with the same
 filter chain the renderer uses.
@@ -150,22 +151,30 @@ def main(argv=None):
     if args.cells and args.region:
         parser.error("use --cells or --region, not both")
     if args.region:
-        region = parse_region(args.region)
+        forced = parse_region(args.region)
     elif args.cells:
-        region = parse_cells(args.cells)
+        forced = parse_cells(args.cells)
     else:
-        region = dylan_layout.FACEBOX_REGION
+        forced = None
+
+    def region_for(video_id):
+        return forced or dylan_layout.facebox_region(video_id)
+
     jobs = []
     if args.dylan_vods:
-        jobs += [(f"https://www.youtube.com/watch?v={vid}", start + SAMPLE_OFFSET, f"{label} ({vid})")
+        jobs += [(f"https://www.youtube.com/watch?v={vid}", start + SAMPLE_OFFSET,
+                  f"{label} ({vid})", region_for(vid))
                  for vid, label, start in DYLAN_VODS]
-    jobs += [(src, at, os.path.basename(src)[:40]) for src, at in zip(args.source, args.at)]
+    for src, at in zip(args.source, args.at):
+        match = re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", src)
+        jobs.append((src, at, os.path.basename(src)[:40],
+                     region_for(match.group(1) if match else None)))
     if not jobs:
         parser.error("pass --dylan-vods or at least one --source/--at pair")
 
     rows = []
     with tempfile.TemporaryDirectory() as work:
-        for index, (src, at, label) in enumerate(jobs):
+        for index, (src, at, label, region) in enumerate(jobs):
             print(f"[{index + 1}/{len(jobs)}] {label} @ {at:.0f}s")
             try:
                 if os.path.isfile(src):
@@ -188,7 +197,7 @@ def main(argv=None):
     sheet = sheet.resize((1600, int(sheet.height * scale)))
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     sheet.save(args.out, quality=88)
-    print("Region:", args.region or args.cells or "FACEBOX_REGION", region)
+    print("Region:", args.region or args.cells or "per-video configured regions")
     print("Red = selected region, green = what the top panel really shows.")
     print("Wrote", args.out)
 

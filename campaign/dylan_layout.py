@@ -22,9 +22,23 @@ MIN_FACE_AREA = 0.001       # fraction of the source frame; smaller faces are no
 MIN_FACE_SAMPLES = 8
 MIN_PRESENCE_RATIO = 0.7
 MAX_CROP_SPEED = 0.16       # fraction of scaled width per second
-# Operator-selected region: grid cells A3+A4+B3+B4, i.e. the top-right half
-# of the source frame. Fractions are (x, y, width, height).
-FACEBOX_REGION = (0.5, 0.0, 0.5, 0.5)
+# Operator-confirmed top-panel regions, as (x, y, width, height) fractions of
+# the source frame. Each is 9:8 in source pixels so the 1080x960 panel shows it
+# whole (a 16:9 region would lose its sides to the cover-crop).
+# Live marathon VODs: the stream-overlay webcam window in the top-right corner
+# plus the "time since stream start" timer above it (1316,0,604,537 on 1920x1080).
+FACEBOX_REGION = (1316 / 1920, 0.0, 604 / 1920, 537 / 1080)
+# Per-video overrides for VODs with a different overlay layout.
+FACEBOX_OVERRIDES = {
+    # "120 Hours Marathon Best Moments": larger webcam window starting further
+    # left, no timer (1200,0,640,569 on 1920x1080).
+    "i1zUT_gKQzA": (1200 / 1920, 0.0, 640 / 1920, 569 / 1080),
+}
+
+
+def facebox_region(video_id=None):
+    """Fractional top-panel region for ``video_id`` (default: live-VOD region)."""
+    return FACEBOX_OVERRIDES.get(video_id, FACEBOX_REGION)
 
 
 def source_dimensions(video_path):
@@ -101,15 +115,15 @@ def build_filter(ass_name, keys):
             f"ass={ass_name}[out]")
 
 
-def facecam_box(video_path, start, length, sample_interval=SAMPLE_INTERVAL):
-    """Return the operator-selected fixed region as ``(x, y, w, h)``.
+def facecam_box(video_path, start, length, sample_interval=SAMPLE_INTERVAL, video_id=None):
+    """Return the operator-confirmed fixed region as ``(x, y, w, h)`` pixels.
 
-    The region is grid cells A3+A4+B3+B4: the top-right half of the source
-    frame. It never pans or resizes. Face sampling still gates whether the
-    stacked layout is used at all, but it does not move this crop.
+    Uses ``FACEBOX_OVERRIDES[video_id]`` when present, else ``FACEBOX_REGION``.
+    It never pans or resizes. Face sampling still gates whether the stacked
+    layout is used at all, but it does not move this crop.
     """
     width, height = source_dimensions(video_path)
-    fx, fy, fw, fh = FACEBOX_REGION
+    fx, fy, fw, fh = facebox_region(video_id)
     return (int(width * fx), int(height * fy),
             int(width * fw), int(height * fh))
 
@@ -143,7 +157,7 @@ def visible_source_box(box):
 def build_stacked_filter(ass_name, box):
     """Dylan-only 9:16 stack: tight fixed facecam over a wide gameplay panel.
 
-    The upper 1080x960 panel crops the operator-selected top-right source region
+    The upper 1080x960 panel crops the operator-confirmed webcam region
     and never pans. The lower 1080x960 panel shows the full source width. No
     branding or blurred filler is added.
     """
