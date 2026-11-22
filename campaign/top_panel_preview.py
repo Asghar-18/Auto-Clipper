@@ -11,6 +11,7 @@ Use it to name the grid cells that hold Dylan's webcam, e.g. "B6:D8".
     python -m campaign.top_panel_preview --dylan-vods
     python -m campaign.top_panel_preview --source URL_OR_FILE --at 12130
     python -m campaign.top_panel_preview --dylan-vods --cells B6:D8   # try a region
+    python -m campaign.top_panel_preview --dylan-vods --region 1316,0,604,537
 """
 import argparse
 import os
@@ -46,6 +47,17 @@ def parse_cells(spec):
     top, bottom = sorted((ROWS.index(r1), ROWS.index(r2)))
     left, right = sorted((int(c1) - 1, int(c2) - 1))
     return (left / GRID, top / GRID, (right - left + 1) / GRID, (bottom - top + 1) / GRID)
+
+
+def parse_region(spec):
+    """``"1316,0,604,537"`` (pixels on a 1920x1080 frame) -> fractional region."""
+    parts = [int(v) for v in re.split(r"\s*,\s*", spec.strip())]
+    if len(parts) != 4 or parts[2] <= 0 or parts[3] <= 0:
+        raise ValueError(f"region must be x,y,w,h in 1920x1080 pixels, got {spec!r}")
+    x, y, w, h = parts
+    if x < 0 or y < 0 or x + w > 1920 or y + h > 1080:
+        raise ValueError(f"region {spec!r} runs outside the 1920x1080 frame")
+    return (x / 1920, y / 1080, w / 1920, h / 1080)
 
 
 def region_box(region, width, height):
@@ -127,13 +139,22 @@ def main(argv=None):
     parser.add_argument("--at", action="append", type=float, default=[],
                         help="timestamp in seconds for each --source")
     parser.add_argument("--cells", help="preview a grid region instead of FACEBOX_REGION, e.g. B6:D8")
+    parser.add_argument("--region", help="preview a pixel region x,y,w,h on a 1920x1080 "
+                        "frame, e.g. 1316,0,604,537 (use a 9:8 shape to avoid side cropping)")
     parser.add_argument("--out", default=os.path.join(
         "output", "thumbnails", "top-panel-preview", "top-panel-preview.jpg"))
     args = parser.parse_args(argv)
     if len(args.source) != len(args.at):
         parser.error("give one --at for every --source")
 
-    region = parse_cells(args.cells) if args.cells else dylan_layout.FACEBOX_REGION
+    if args.cells and args.region:
+        parser.error("use --cells or --region, not both")
+    if args.region:
+        region = parse_region(args.region)
+    elif args.cells:
+        region = parse_cells(args.cells)
+    else:
+        region = dylan_layout.FACEBOX_REGION
     jobs = []
     if args.dylan_vods:
         jobs += [(f"https://www.youtube.com/watch?v={vid}", start + SAMPLE_OFFSET, f"{label} ({vid})")
@@ -167,7 +188,7 @@ def main(argv=None):
     sheet = sheet.resize((1600, int(sheet.height * scale)))
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     sheet.save(args.out, quality=88)
-    print("Region:", args.cells or "FACEBOX_REGION", region)
+    print("Region:", args.region or args.cells or "FACEBOX_REGION", region)
     print("Red = selected region, green = what the top panel really shows.")
     print("Wrote", args.out)
 

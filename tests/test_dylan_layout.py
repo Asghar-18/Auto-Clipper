@@ -130,6 +130,14 @@ class DylanLayoutTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             preview.parse_cells('Z9:A1')
 
+    def test_preview_parses_pixel_region(self):
+        from campaign import top_panel_preview as preview
+        self.assertEqual(preview.parse_region('960, 0, 960, 540'), (0.5, 0.0, 0.5, 0.5))
+        with self.assertRaises(ValueError):
+            preview.parse_region('1500,0,604,537')   # past the right edge
+        with self.assertRaises(ValueError):
+            preview.parse_region('1,2,3')
+
 
 if __name__ == '__main__':
     unittest.main()
