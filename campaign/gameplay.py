@@ -193,7 +193,13 @@ def bucketize(frames, waiting_flags, bucket_seconds=BUCKET_SECONDS):
 
 
 def waiting_flags_for(frames, signatures, template_end=WAITING_TEMPLATE_END):
-    """Flag every frame that visually matches the confirmed pre-game waiting screen."""
+    """Flag frames matching this campaign's confirmed pre-game waiting screen.
+
+    ``None`` disables template matching. The Kreek DAY1 waiting card was manually
+    confirmed; other campaigns must not inherit that template.
+    """
+    if template_end is None:
+        return [False] * len(signatures)
     templates = [signature for (timestamp, _), signature in zip(frames, signatures)
                  if timestamp <= template_end]
     if not templates:
@@ -336,6 +342,7 @@ def is_gameplay_window(start, end, timeline, min_coverage=95.0, max_static=20.0,
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True)
+    parser.add_argument("--campaign", help="campaign id (default: GTA_CAMPAIGN or kreekcraft)")
     parser.add_argument("--out", default=None)
     parser.add_argument("--range-start", type=float, help="dense contact sheet from this source second")
     parser.add_argument("--range-end", type=float, help="dense contact sheet to this source second")
@@ -349,21 +356,28 @@ def main(argv=None):
     config.ensure_dirs()
     try:
         segments = parse_confirm(args.confirm)
-        src = source_module.resolve(url=args.url)
+        profile = config.active_profile(args.campaign)
+        src = source_module.resolve(url=args.url, campaign_id=profile.id)
         storyboard = ensure_storyboard(args.url, src.key)
         frames, thumbnails, signatures = storyboard_frames(storyboard)
-        flags = waiting_flags_for(frames, signatures)
+        flags = waiting_flags_for(frames, signatures, profile.source.waiting_template_end)
         buckets = bucketize(frames, flags)
         proposed = build_segments(buckets)
     except (ValueError, RuntimeError, OSError) as error:
         sys.exit(str(error))
-    out = os.path.abspath(args.out or os.path.join(config.METADATA, src.key + "-gameplay-timeline.json"))
-    contact = os.path.join(config.THUMBNAILS, src.key + "-gameplay-contact.jpg")
+    out = os.path.abspath(args.out or config.timeline_path(src.key, profile.id, prefer_existing=False))
+    contact = os.path.join(config.THUMBNAILS,
+                           f"{profile.clip_prefix}-{src.key}-gameplay-contact.jpg")
     timeline = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "stage": "gameplay-timeline",
-        "source": {"key": src.key, "url": src.url, "title": src.title, "channel": src.channel},
+        "campaign_id": profile.id,
+        "campaign": {"id": profile.id, "name": profile.name},
+        "source": {"key": src.key, "url": src.url, "title": src.title, "channel": src.channel,
+                   "platform": source_module.platform_name(src.info),
+                   "upload_date": src.info.get("upload_date")},
         "method": "youtube-storyboard-sb0-visual-signals",
+        "waiting_template_end": profile.source.waiting_template_end,
         "sample_interval_seconds": round((frames[-1][0] - frames[0][0]) / max(1, len(frames) - 1), 2) if frames else 0,
         "sample_count": len(frames),
         "contact_sheet": contact,
@@ -376,7 +390,11 @@ def main(argv=None):
     if os.path.isfile(out):
         with open(out, encoding="utf-8") as handle:
             previous = json.load(handle)
-        if previous.get("confirmed_segments") and not segments:
+        stamped = previous.get("campaign_id")
+        legacy_kreek = not stamped and os.path.basename(out).startswith(
+            profile.clip_prefix + "-") and profile.id == config.DEFAULT_ID
+        same_campaign = stamped == profile.id or legacy_kreek
+        if same_campaign and previous.get("confirmed_segments") and not segments:
             timeline["confirmed_segments"] = previous["confirmed_segments"]
             timeline["confirmed_by_human"] = True
             timeline["confirmation_basis"] = previous.get("confirmation_basis", "preserved")

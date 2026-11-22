@@ -1,6 +1,8 @@
-"""Stage 3: render one candidate with the fit layout, official logo and captions.
+"""Stage 3: render one candidate with its campaign layout, logo and captions.
 
-Reuses clip.py's caption writer; never publishes anything.
+Reuses clip.py's caption writer; never publishes anything. Kreek keeps the fit
+layout with its official overlay; Dylan uses an adaptive face-following crop with
+the fit layout as fallback.
 """
 import argparse
 import glob
@@ -12,7 +14,7 @@ from datetime import datetime, timezone
 
 import clip
 
-from . import captions, config, source as source_module
+from . import captions, config, dylan_layout, source as source_module
 
 
 def srt_time(seconds):
@@ -59,19 +61,34 @@ def build_filter(ass_name, logo_supported=True):
             "[bg][fg]overlay=(W-w)/2:(H-h)/2,setpts=PTS-STARTPTS,"
             f"ass={ass_name}[captioned]")
     if not logo_supported:
-        return base + "[captioned]null[out]"
+        return base + ";[captioned]null[out]"
     return (base + ";" +
             "[1:v]scale=1080:-2[logo];"
             "[captioned][logo]overlay=0:24:shortest=0[out]")
 
 
+def compose_filter(profile, ass_name, media_path, start, length, has_logo=False):
+    """Return ``(filtergraph, adaptive_used)`` for exactly one campaign profile."""
+    if profile.video.layout in ("adaptive-face", "adaptive-stacked") and not has_logo:
+        keys = dylan_layout.adaptive_keys(media_path, start, length)
+        if keys:
+            if profile.video.layout == "adaptive-stacked":
+                box = dylan_layout.facecam_box(media_path, start, length)
+                if box:
+                    return dylan_layout.build_stacked_filter(ass_name, box), True
+            else:
+                return dylan_layout.build_filter(ass_name, keys), True
+    return build_filter(ass_name, logo_supported=has_logo), False
+
+
 def render_candidate(src, media_path, candidate, logo, out_dir, spoken_language="en",
-                     source_start=None):
-    """Render one window. Returns paths to the MP4, SRT and render report."""
+                     source_start=None, campaign_id=None):
+    """Render one window for exactly one campaign. Never publishes."""
+    profile = config.active_profile(campaign_id)
     clip._forced_language = None if spoken_language == "auto" else spoken_language
     os.makedirs(out_dir, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    name = f"kreek-{src.key}-{stamp}-{candidate['rank']:02d}"
+    name = f"{profile.clip_prefix}-{src.key}-{stamp}-{candidate['rank']:02d}"
     mp4 = os.path.join(out_dir, name + ".mp4")
     srt = os.path.join(out_dir, name + ".srt")
     ass_path = os.path.join(out_dir, "cap_" + name + ".ass")
@@ -89,16 +106,20 @@ def render_candidate(src, media_path, candidate, logo, out_dir, spoken_language=
                              raw_words.caption_fallback_reason)
     os.remove(segment_audio)
 
-    margin = clip.caption_margin_for_video(media_path, crop=False, source_roi=None)
+    # Only campaigns that require a logo receive an added overlay. Dylan Page
+    # forbids added branding, so this stays None for that profile.
+    has_logo = bool(profile.editing.logo_required and logo) and os.path.isfile(logo)
+    filtergraph, adaptive = compose_filter(profile, os.path.basename(ass_path),
+                                           media_path, start, length, has_logo)
+    margin = clip.caption_margin_for_video(media_path, crop=adaptive, source_roi=None)
     clip.write_ass(ass_path, words, start, length, credit=None, caption_margin_v=margin)
     write_srt(srt, words, start, length)
 
-    has_logo = bool(logo) and os.path.isfile(logo)
     command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                "-ss", f"{start:.2f}", "-i", os.path.abspath(media_path)]
     if has_logo:
         command += ["-loop", "1", "-i", os.path.abspath(logo)]
-    command += ["-t", f"{length:.2f}", "-filter_complex", build_filter(os.path.basename(ass_path), has_logo),
+    command += ["-t", f"{length:.2f}", "-filter_complex", filtergraph,
                 "-map", "[out]", "-map", "0:a:0?", "-af", "asetpts=PTS-STARTPTS",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", mp4]
@@ -110,10 +131,17 @@ def render_candidate(src, media_path, candidate, logo, out_dir, spoken_language=
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "stage": "render",
+        "clip_id": name,
         "video": os.path.basename(mp4),
         "srt": os.path.basename(srt),
+        "video_path": os.path.abspath(mp4),
+        "srt_path": os.path.abspath(srt),
+        "campaign_id": profile.id,
+        "campaign": {"id": profile.id, "name": profile.name},
         "source": {"key": src.key, "url": src.url, "file": src.file,
-                   "title": src.title, "channel": src.channel},
+                   "title": src.title, "channel": src.channel,
+                   "platform": source_module.platform_name(src.info),
+                   "upload_date": src.info.get("upload_date")},
         "source_start": round(source_start if source_start is not None else start, 2),
         "source_end": round((source_start if source_start is not None else start) + length, 2),
         "duration": round(length, 2),
@@ -124,10 +152,27 @@ def render_candidate(src, media_path, candidate, logo, out_dir, spoken_language=
         "spoken_language": words.spoken_language,
         "caption_language": words.caption_language,
         "transcript": " ".join(word[2] for word in words),
-        "layout": "fit-9x16",
+        "layout": ("adaptive-stacked-9x16" if adaptive and profile.video.layout == "adaptive-stacked"
+                   else "adaptive-face-9x16" if adaptive
+                   else "fit-9x16" if profile.video.layout in ("adaptive-face", "adaptive-stacked")
+                   else f"{profile.video.layout}-9x16"),
+        "composition": {
+            "mode": ("adaptive-stacked" if adaptive and profile.video.layout == "adaptive-stacked"
+                     else "adaptive-face" if adaptive
+                     else "fit-fallback" if profile.video.layout in ("adaptive-face", "adaptive-stacked")
+                     else "fit"),
+            "identity_verified": False,
+            "note": ("tight fixed facecam panel over wide gameplay; manual identity/focus review required"
+                     if adaptive and profile.video.layout == "adaptive-stacked"
+                     else "face-position crop; manual identity/focus review required" if adaptive
+                     else "fit fallback; manual identity/focus review required"),
+        },
         "test": src.is_local,
         "approved": False,
         "posted": {},
+        "platforms": list(profile.publishing.platforms),
+        "publishing": {"status": "not_published", "publication_urls": {}},
+        "publication_urls": {},
     }
     json_path = os.path.join(out_dir, name + ".json")
     with open(json_path, "w", encoding="utf-8") as handle:
@@ -143,16 +188,22 @@ def main(argv=None):
     parser.add_argument("--rank", type=int, default=1, help="candidate rank to render")
     parser.add_argument("--start", type=float, help="override candidate start (source seconds)")
     parser.add_argument("--length", type=float, help="override clip length")
-    parser.add_argument("--logo", help="override official logo PNG path")
+    parser.add_argument("--logo", help="override official logo PNG path (logo campaigns only)")
+    parser.add_argument("--campaign", help="campaign id (default: GTA_CAMPAIGN or kreekcraft)")
     parser.add_argument("--spoken-language", default="en", choices=("en", "hi", "auto"))
     parser.add_argument("--out-dir", default=None)
     args = parser.parse_args(argv)
     config.ensure_dirs()
     try:
-        src = source_module.resolve(file=args.file, url=args.url)
+        profile = config.active_profile(args.campaign)
+        src = source_module.resolve(file=args.file, url=args.url, campaign_id=profile.id)
         if args.timestamps:
             with open(args.timestamps, encoding="utf-8") as handle:
                 report = json.load(handle)
+            stamped = report.get("campaign_id")
+            if stamped and stamped != profile.id:
+                raise ValueError(
+                    f"timestamps belong to campaign {stamped!r}, not {profile.id!r}")
             matches = [row for row in report["candidates"] if row["rank"] == args.rank]
             if not matches:
                 raise ValueError(f"No candidate with rank {args.rank} in {args.timestamps}")
@@ -167,7 +218,7 @@ def main(argv=None):
         source_start = float(candidate["start"])
         candidate = dict(candidate, end=source_start + length)
         out_dir = os.path.abspath(args.out_dir or config.CANDIDATES)
-        logo = config.logo_path(args.logo)
+        logo = config.logo_path(args.logo, profile.id) if profile.editing.logo_required else None
         if src.is_local:
             media = source_module.prepare_audio(src)
         else:
@@ -175,7 +226,8 @@ def main(argv=None):
             section_start = max(0.0, source_start - pad)
             section_end = source_start + length + pad
             section_path = os.path.join(config.WORK,
-                                        f"{src.key}-{int(section_start)}-{int(section_end)}.mp4")
+                                        f"{profile.clip_prefix}-{src.key}-"
+                                        f"{int(section_start)}-{int(section_end)}.mp4")
             matching = [path for path in glob.glob(os.path.splitext(section_path)[0] + ".*")
                         if os.path.getsize(path) > 0]
             if matching:
@@ -187,7 +239,8 @@ def main(argv=None):
             relative_start = source_start - section_start
             candidate = dict(candidate, start=relative_start, end=relative_start + length)
         mp4, srt, json_path = render_candidate(src, media, candidate, logo, out_dir,
-                                               args.spoken_language, source_start=source_start)
+                                               args.spoken_language, source_start=source_start,
+                                                campaign_id=profile.id)
     except (ValueError, RuntimeError, OSError) as error:
         sys.exit(str(error))
     print("rendered:", mp4)

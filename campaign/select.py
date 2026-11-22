@@ -19,6 +19,7 @@ import numpy as np
 import clip
 
 from . import analyze, captions, config, gameplay, source as source_module
+from shared import storage
 
 STOPWORDS = set("""a an the and or but if of to in on at for with is are was were be been being
 it its this that these those i me my we our you your he she they them his her their do does did
@@ -86,7 +87,13 @@ def interest_score(features, audio_rank, motion):
     return round(max(0.0, positive - penalty) * 10.0, 2)
 
 
-def existing_ranges(extra_exclude):
+def existing_ranges(extra_exclude, source_key=None, source_url=None, campaign_id=None):
+    """Collect windows to avoid, isolated by campaign and source.
+
+    With no filters this keeps the legacy "all clips" behaviour for callers that
+    want a global view. The campaign CLI always passes the filters, so a Kreek
+    clip can no longer exclude a Dylan moment (or vice versa).
+    """
     ranges = []
     folders = (config.CANDIDATES, config.FINAL)
     for folder in folders:
@@ -99,6 +106,13 @@ def existing_ranges(extra_exclude):
                 with open(os.path.join(folder, name), encoding="utf-8") as handle:
                     row = json.load(handle)
             except (OSError, ValueError):
+                continue
+            if campaign_id and storage.infer_campaign(row, os.path.splitext(name)[0]) != campaign_id:
+                continue
+            src = row.get("source") or {}
+            if source_key and src.get("key") != source_key:
+                continue
+            if source_url and src.get("url") != source_url:
                 continue
             start, end = row.get("source_start"), row.get("source_end")
             if isinstance(start, (int, float)) and isinstance(end, (int, float)):
@@ -141,7 +155,8 @@ def transcribe_window(audio_path, start, length, work_name):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True)
-    parser.add_argument("--start", type=float, default=10660.0,
+    parser.add_argument("--campaign", help="campaign id (default: GTA_CAMPAIGN or kreekcraft)")
+    parser.add_argument("--start", type=float, default=0.0,
                         help="start of the confirmed gameplay range")
     parser.add_argument("--timeline", default=None)
     parser.add_argument("--clip-len", type=float, default=config.DEFAULT_CLIP_LEN)
@@ -156,9 +171,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config.ensure_dirs()
     try:
-        src = source_module.resolve(url=args.url)
-        timeline = analyze.load_gameplay_timeline(os.path.abspath(args.timeline or os.path.join(
-            config.METADATA, src.key + "-gameplay-timeline.json")))
+        profile = config.active_profile(args.campaign)
+        src = source_module.resolve(url=args.url, campaign_id=profile.id)
+        timeline_file = analyze.timeline_path(src, args.timeline, profile.id)
+        timeline = analyze.load_gameplay_timeline(timeline_file, profile.id)
         audio = source_module.prepare_audio(src)
         levels = analyze.audio_levels(audio, args.start)
         rows = analyze.find_candidates(levels, args.start, src.duration, args.clip_len,
@@ -167,7 +183,8 @@ def main(argv=None):
     except (ValueError, RuntimeError, OSError) as error:
         sys.exit(str(error))
 
-    excluded = existing_ranges(args.exclude)
+    excluded = existing_ranges(args.exclude, source_key=src.key,
+                               source_url=src.url, campaign_id=profile.id)
     eligible = []
     for row in rows:
         stats = gameplay.window_stats(row["start"], row["end"], timeline)
@@ -212,13 +229,16 @@ def main(argv=None):
         row["rank"] = rank
         row["score"] = row["interest_score"]
 
-    out = os.path.abspath(args.out or os.path.join(config.CANDIDATES, src.key + "-alternatives.json"))
+    out = os.path.abspath(args.out or os.path.join(
+        config.CANDIDATES, f"{profile.clip_prefix}-{src.key}-alternatives.json"))
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "stage": "select",
-        "source": {"key": src.key, "url": src.url, "title": src.title, "channel": src.channel},
-        "timeline": os.path.abspath(args.timeline or os.path.join(
-            config.METADATA, src.key + "-gameplay-timeline.json")),
+        "campaign_id": profile.id,
+        "source": {"key": src.key, "url": src.url, "title": src.title, "channel": src.channel,
+                   "platform": source_module.platform_name(src.info),
+                   "upload_date": src.info.get("upload_date")},
+        "timeline": timeline_file,
         "method": "audio-window + verified-gameplay gate + transcript-interest ranking",
         "clip_len": args.clip_len,
         "excluded_ranges": excluded,

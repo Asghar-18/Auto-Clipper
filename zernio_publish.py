@@ -1,16 +1,14 @@
-"""Schedule one reviewed clip to YouTube and Instagram through the Zernio SDK.
+"""Preview or schedule one reviewed clip to its campaign's Zernio platforms.
 
-Uses the official `zernio-sdk` (`from zernio import Zernio`). The API key is read
-from ZERNIO_API_KEY in the environment or a local, gitignored `.env` file; it is
-never stored in this file, in clip metadata, or in logs.
+The official `zernio-sdk` (`from zernio import Zernio`) is used. The API key and
+account IDs are read only from the private environment / gitignored .env; they
+are never stored in metadata, prompts, logs, or source files.
 
-Each platform keeps its own post ID and idempotency key under `zernio_posts`, so a
-clip published on one platform can later be published on the other without
-republishing or reusing an idempotency key. Legacy single-post records are
-migrated into that structure on first use.
+Before any network call, the publisher validates the clip's campaign, video,
+caption, thumbnail, allowed platforms, missing connections, and explicit human
+approval. Dry-run is the default; the pipeline itself never calls this script.
 
-Dry-run by default. Publishing requires explicit per-clip approval, an explicit
-platform selection, and --publish. The pipeline itself never calls this script.
+Supported Zernio platform keys: youtube, instagram, tiktok, twitter (X).
 """
 import argparse
 import datetime as dt
@@ -25,25 +23,34 @@ import requests
 from late.client.exceptions import LateError
 from zernio import Zernio
 
+from campaigns import get as get_profile
+from shared import storage
+from shared.publishing import preflight
+
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 PLATFORMS = (
     ("youtube", "ZERNIO_YOUTUBE_ACCOUNT_ID"),
     ("instagram", "ZERNIO_INSTAGRAM_ACCOUNT_ID"),
+    ("tiktok", "ZERNIO_TIKTOK_ACCOUNT_ID"),
+    ("twitter", "ZERNIO_X_ACCOUNT_ID"),
 )
 PLATFORM_ENV = dict(PLATFORMS)
+PLATFORM_ALIASES = {"x": "twitter"}
+CAPTION_FIELDS = {
+    "youtube": "youtube_description",
+    "instagram": "instagram_caption",
+    "tiktok": "tiktok_caption",
+    "twitter": "x_caption",
+}
 # Only these names are ever read from a local .env; real environment values win.
 ENV_NAMES = frozenset({
-    "ZERNIO_API_KEY", "LATE_API_KEY", "ZERNIO_YOUTUBE_ACCOUNT_ID",
-    "ZERNIO_INSTAGRAM_ACCOUNT_ID", "GTA_UNATTENDED_POSTS",
+    "ZERNIO_API_KEY", "LATE_API_KEY", "GTA_CAMPAIGN", "GTA_UNATTENDED_POSTS",
+    *PLATFORM_ENV.values(),
 })
 
 
 def load_dotenv(path=None):
-    """Load Zernio settings from a local .env into os.environ, without printing.
-
-    Values already present in the process environment take precedence. The file
-    is gitignored and is never read from anywhere outside this repository root.
-    """
+    """Load Zernio settings from a local .env into os.environ, without printing."""
     path = Path(path) if path else Path(__file__).resolve().parent / ".env"
     if not path.is_file():
         return
@@ -81,10 +88,17 @@ def save_metadata(path, metadata):
         json.dump(metadata, file, ensure_ascii=False, indent=2)
 
 
-def load_metadata(path):
+def normalise_platform(name):
+    key = str(name).strip().lower()
+    return PLATFORM_ALIASES.get(key, key)
+
+
+def load_metadata(path, campaign_id=None, name=None):
+    """Load one final clip and resolve the single campaign it belongs to."""
     with path.open(encoding="utf-8") as file:
         metadata = json.load(file)
-    if not metadata.get("title") or not metadata.get("youtube_description") or not metadata.get("instagram_caption"):
+    if not metadata.get("title") or not metadata.get("youtube_description") \
+            or not metadata.get("instagram_caption"):
         raise ValueError("metadata needs a title, YouTube description, and Instagram caption")
     if metadata.get("test"):
         raise ValueError("test clips cannot be published")
@@ -103,6 +117,10 @@ def load_metadata(path):
             raise ValueError("expected MP4 not found; refusing to publish")
         if sha256_file(video) != expected_hash:
             raise ValueError("MP4 changed since validation/approval; refusing to publish")
+
+    resolved = storage.require_campaign(metadata, name or path.stem, expected=campaign_id)
+    metadata["campaign_id"] = resolved
+    metadata.setdefault("campaign", {"id": resolved, "name": get_profile(resolved).name})
     return metadata
 
 
@@ -121,6 +139,19 @@ def post_state(metadata, platform):
             }
         posts[platform] = state
     return state
+
+
+def publishing_status(metadata, targets):
+    """Distinguish scheduled posts from already-published ones in metadata."""
+    states = [post_state(metadata, platform) for platform, _ in targets]
+    if not all(state.get("post_id") for state in states):
+        return "partial"
+    statuses = {str(state.get("status", "")).lower() for state in states}
+    if "scheduled" in statuses:
+        return "scheduled" if statuses == {"scheduled"} else "mixed"
+    # Zernio can report short-lived states such as "publishing"; once every
+    # platform has an accepted post ID, the post has been handed off successfully.
+    return "published"
 
 
 def list_accounts():
@@ -143,47 +174,104 @@ def scheduled_local_time(value):
     return when.astimezone(IST).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
+def post_url(post):
+    """Return a publication URL only when Zernio actually supplied one."""
+    for key in ("url", "publicUrl", "postUrl", "shareUrl"):
+        value = post.get(key)
+        if value:
+            return str(value)
+    return None
+
+
 def caption_for(platform, metadata):
     """Use the platform's own campaign-correct caption; never cross-contaminate."""
-    return (metadata["youtube_description"] if platform == "youtube"
-            else metadata["instagram_caption"])
+    field = CAPTION_FIELDS.get(normalise_platform(platform), "caption_text")
+    return str(metadata.get(field) or metadata.get("caption_text") or "")
 
 
 def platform_entry(platform, account_id, metadata):
     entry = {
-        "platform": platform,
+        "platform": normalise_platform(platform),
         "accountId": account_id,
         "customContent": caption_for(platform, metadata),
     }
-    if platform == "youtube":
+    if entry["platform"] == "youtube":
         entry["platformSpecificData"] = {
             "title": metadata["title"][:100],
             "visibility": "public",
             "categoryId": "20",
             "madeForKids": False,
         }
-    # Vertical 9:16 clips are automatically published as Shorts/Reels by Zernio;
-    # Instagram contentType is intentionally left unset (only 'story' is explicit).
+    # 9:16 video is handled as Shorts/Reels by Zernio. No platform-specific
+    # branding is added here; campaign artwork stays in the rendered clip.
     return entry
 
 
-def selected_accounts(names):
+def post_body(metadata, media_url, targets, schedule):
+    """Build the SDK create_post kwargs for one upload and its selected platforms."""
+    body = {
+        "content": caption_for(targets[0][0], metadata) if targets else "",
+        "media_items": [{"type": "video", "url": media_url}],
+        "platforms": [platform_entry(platform, account_id, metadata)
+                      for platform, account_id in targets],
+        "title": metadata["title"][:100],
+        "timezone": "Asia/Kolkata",
+        "hashtags": list(metadata.get("hashtags", [])),
+    }
+    if schedule == "now":
+        body["publish_now"] = True
+    else:
+        body["scheduled_for"] = schedule
+    return body
+
+
+def selected_accounts(names, profile):
+    """Resolve account IDs for this campaign, reporting every missing connection."""
     targets = []
-    for name in names:
-        account_id = os.environ.get(PLATFORM_ENV[name], "")
+    missing = []
+    disallowed = []
+    for raw in names:
+        platform = normalise_platform(raw)
+        if platform not in profile.publishing.platforms:
+            disallowed.append(platform)
+            continue
+        env_name = profile.publishing.account_env.get(platform) or PLATFORM_ENV.get(platform)
+        account_id = os.environ.get(env_name, "") if env_name else ""
         if not account_id:
-            raise ValueError(f"{PLATFORM_ENV[name]} is not configured")
-        targets.append((name, account_id))
+            missing.append(env_name or f"(no account variable for {platform})")
+            continue
+        targets.append((platform, account_id))
+    if disallowed:
+        raise ValueError(f"{profile.name} does not allow platform(s): {', '.join(disallowed)}")
+    if missing:
+        raise ValueError(
+            "Missing Zernio account connection(s): " + ", ".join(missing)
+            + ". Connect them in Zernio and set the matching private environment variable.")
     return targets
 
 
-def upload_and_schedule(zernio, video_path, metadata_path, metadata, targets, schedule, retry=False):
-    """Upload once, then create one post per selected platform, sequentially.
+def requested_platforms(value, profile):
+    """Parse --platform, including legacy 'both' and campaign-wide 'all'."""
+    raw = [item.strip().lower() for item in str(value).split(",") if item.strip()]
+    if raw in (["both"],):
+        return ["youtube", "instagram"]
+    if raw in (["all"], ["campaign"]):
+        return list(profile.publishing.platforms)
+    result = []
+    for item in raw:
+        platform = normalise_platform(item)
+        if platform not in PLATFORM_ENV:
+            raise ValueError(f"Unknown platform {item!r}. Choose from: "
+                             + ", ".join(dict(PLATFORM_ENV)) + ", both, all")
+        if platform not in result:
+            result.append(platform)
+    if not result:
+        raise ValueError("Select at least one platform.")
+    return result
 
-    Each platform gets its own stored idempotency key. A post already recorded for
-    a platform is never recreated. Errors are recorded before raising so a later
-    run cannot silently create a duplicate with a fresh key.
-    """
+
+def upload_and_schedule(zernio, video_path, metadata_path, metadata, targets, schedule, retry=False):
+    """Upload once, then create one post per selected platform, sequentially."""
     size = video_path.stat().st_size
     signed = zernio.media.get_media_presigned_url(video_path.name, "video/mp4", size=size)
     with video_path.open("rb") as file:
@@ -200,19 +288,7 @@ def upload_and_schedule(zernio, video_path, metadata_path, metadata, targets, sc
                              "Check Zernio, then re-run with --retry to reuse its idempotency key.")
         idempotency_key = state.get("idempotency_key") or str(uuid.uuid4())
         state["idempotency_key"] = idempotency_key
-        caption = caption_for(platform, metadata)
-        payload = {
-            "content": caption,
-            "media_items": [{"type": "video", "url": signed["publicUrl"]}],
-            "platforms": [platform_entry(platform, account_id, metadata)],
-            "title": metadata["title"][:100],
-            "timezone": "Asia/Kolkata",
-            "hashtags": list(metadata.get("hashtags", [])),
-        }
-        if schedule == "now":
-            payload["publish_now"] = True
-        else:
-            payload["scheduled_for"] = schedule
+        payload = post_body(metadata, signed["publicUrl"], [(platform, account_id)], schedule)
 
         # Persist the key before the call so a failed/uncertain attempt is reusable.
         save_metadata(metadata_path, metadata)
@@ -231,15 +307,27 @@ def upload_and_schedule(zernio, video_path, metadata_path, metadata, targets, sc
             state["last_attempt_at"] = now
             save_metadata(metadata_path, metadata)
             raise RuntimeError(state["error"])
+        url = post_url(post)
         state.update({
             "post_id": post_id,
             "status": post.get("status", "accepted"),
             "scheduled_for": post.get("scheduledFor") or schedule,
             "published_at": now,
         })
+        if url:
+            state["url"] = url
+            metadata.setdefault("publication_urls", {})[platform] = url
         state.pop("error", None)
         save_metadata(metadata_path, metadata)
         results.append((platform, post_id, state["status"]))
+
+    metadata["publishing"] = {
+        "status": publishing_status(metadata, targets),
+        "post_ids": {platform: post_state(metadata, platform).get("post_id")
+                     for platform, _ in targets},
+        "publication_urls": metadata.get("publication_urls", {}),
+    }
+    save_metadata(metadata_path, metadata)
     return results
 
 
@@ -255,8 +343,10 @@ def main():
                         help="clip path without extension or path to its .mp4/.json")
     parser.add_argument("--accounts", action="store_true",
                         help="read-only: verify auth and list connected account IDs")
-    parser.add_argument("--platform", choices=("youtube", "instagram", "both"), default="both",
-                        help="which connected platform(s) to publish to (default: both)")
+    parser.add_argument("--campaign", help="expected campaign id; otherwise read from clip metadata")
+    parser.add_argument("--platform", default="both",
+                        help="youtube, instagram, tiktok, twitter/x, a comma-separated list, "
+                             "'both' (legacy), or 'all'/'campaign' (default: both)")
     parser.add_argument("--scheduled-for", help="ISO time with offset, for example 2026-11-18T12:00:00+05:30")
     parser.add_argument("--now", action="store_true", help="publish immediately instead of scheduling")
     parser.add_argument("--publish", action="store_true", help="send the post to Zernio; otherwise only preview")
@@ -280,7 +370,9 @@ def main():
     if not video_path.is_file() or not metadata_path.is_file():
         sys.exit("Clip files not found. Expected matching .mp4 and .json files.")
     try:
-        metadata = load_metadata(metadata_path)
+        metadata = load_metadata(metadata_path, args.campaign, base.name)
+        profile = get_profile(metadata["campaign_id"])
+        names = requested_platforms(args.platform, profile)
         schedule = "now" if args.now else (scheduled_local_time(args.scheduled_for) if args.scheduled_for else None)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         sys.exit(str(error))
@@ -295,13 +387,20 @@ def main():
     if args.unattended and os.environ.get("GTA_UNATTENDED_POSTS") != "1":
         sys.exit("Set GTA_UNATTENDED_POSTS=1 in your private environment to use legacy unattended mode.")
 
-    names = [p for p, _ in PLATFORMS] if args.platform == "both" else [args.platform]
     try:
-        targets = selected_accounts(names)
+        checks = preflight(metadata, profile, names, base.name)
+    except (OSError, ValueError) as error:
+        sys.exit(str(error))
+    failed = [item for item in checks if not item["passed"]]
+    if failed:
+        print("Publishing preflight failed:")
+        for item in failed:
+            print(f"  FAIL {item['name']}: {item['detail']}")
+        sys.exit("Fix the clip/profile mismatch or missing approval before publishing.")
+    try:
+        targets = selected_accounts(names, profile)
     except ValueError as error:
         sys.exit(str(error))
-    if args.publish and not targets:
-        sys.exit("No account IDs configured for the selected platform(s).")
 
     # Check every selected platform before any network call, so a partial request
     # can never start when one of the requested platforms is already published.
@@ -315,7 +414,7 @@ def main():
                      "Check Zernio, then re-run with --retry to reuse its idempotency key.")
 
     destinations = ', '.join(p for p, _ in targets)
-    plan = f"{base.name}: {schedule or 'DRY RUN — no schedule sent'} -> {destinations}"
+    plan = f"{base.name} [{metadata['campaign_id']}]: {schedule or 'DRY RUN — no schedule sent'} -> {destinations}"
     print(plan)
     if not args.publish:
         print("No post sent. Add --publish to schedule or publish this clip.")

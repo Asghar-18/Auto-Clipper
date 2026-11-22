@@ -17,13 +17,25 @@ import clip
 from . import config, gameplay, source as source_module
 
 
-def load_gameplay_timeline(path):
+def load_gameplay_timeline(path, campaign_id=None):
     """Load a human-confirmed timeline; refuse to rank audio peaks without one."""
     with open(path, encoding="utf-8") as handle:
         timeline = json.load(handle)
+    stamped = timeline.get("campaign_id")
+    if stamped and campaign_id and stamped != campaign_id:
+        raise ValueError(
+            f"timeline belongs to campaign {stamped!r}, not {campaign_id!r}; "
+            "generate a campaign-specific gameplay timeline")
     if not timeline.get("confirmed_segments"):
         raise ValueError(f"{path} is not confirmed; run campaign.gameplay --confirm START-END first")
     return timeline
+
+
+def timeline_path(src, explicit=None, campaign_id=None):
+    """Resolve an explicit timeline path or this campaign's scoped/legacy file."""
+    if explicit:
+        return os.path.abspath(explicit)
+    return config.timeline_path(src.key, campaign_id or src.campaign_id)
 
 
 def filter_to_gameplay(candidates, timeline, min_coverage, margin):
@@ -135,6 +147,7 @@ def build_report(src, audio_path, levels, candidates, params, gameplay_info=None
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "stage": "analyze",
+        "campaign_id": src.campaign_id,
         "source": {
             "key": src.key,
             "label": src.label,
@@ -143,7 +156,10 @@ def build_report(src, audio_path, levels, candidates, params, gameplay_info=None
             "url": src.url,
             "file": src.file,
             "duration": round(src.duration, 2),
-            "authorized_campaign_source": not src.is_local,
+            "platform": source_module.platform_name(src.info),
+            "upload_date": src.info.get("upload_date"),
+            "source_type": "local test" if src.is_local else "remote VOD",
+            "authorization_note": "operator must confirm this source is authorized for the campaign",
         },
         "scan": {
             "audio_file": os.path.basename(audio_path),
@@ -159,7 +175,8 @@ def build_report(src, audio_path, levels, candidates, params, gameplay_info=None
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--file", help="local sample video (fast pipeline tests)")
-    parser.add_argument("--url", help="authorized KreekCraft VOD URL")
+    parser.add_argument("--url", help="authorized VOD URL for the active campaign")
+    parser.add_argument("--campaign", help="campaign id (default: GTA_CAMPAIGN or kreekcraft)")
     parser.add_argument("--clip-len", type=float, default=config.DEFAULT_CLIP_LEN)
     parser.add_argument("--lead-in", type=float, default=config.DEFAULT_LEAD_IN)
     parser.add_argument("--top", type=int, default=config.DEFAULT_TOP)
@@ -176,13 +193,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config.ensure_dirs()
     try:
-        src = source_module.resolve(file=args.file, url=args.url)
+        profile = config.active_profile(args.campaign)
+        src = source_module.resolve(file=args.file, url=args.url, campaign_id=profile.id)
         audio_path = source_module.prepare_audio(src)
         timeline = None
+        timeline_file = None
         if args.timeline or not src.is_local:
-            timeline_path = os.path.abspath(args.timeline or os.path.join(
-                config.METADATA, src.key + "-gameplay-timeline.json"))
-            timeline = load_gameplay_timeline(timeline_path)
+            timeline_file = timeline_path(src, args.timeline, profile.id)
+            timeline = load_gameplay_timeline(timeline_file, profile.id)
         levels = audio_levels(audio_path, args.start, args.end)
         params = {
             "clip_len": args.clip_len, "lead_in": args.lead_in, "top": args.top,
@@ -200,8 +218,7 @@ def main(argv=None):
                                             args.min_gameplay_coverage, args.gameplay_margin)
             gameplay_info = {
                 "applied": True,
-                "timeline": os.path.abspath(args.timeline or os.path.join(
-                    config.METADATA, src.key + "-gameplay-timeline.json")),
+                "timeline": timeline_file,
                 "confirmed_segments": timeline["confirmed_segments"],
                 "candidates_before": before,
                 "candidates_after": len(candidates),
@@ -211,7 +228,8 @@ def main(argv=None):
         report = build_report(src, audio_path, levels, candidates, params, gameplay_info)
     except (ValueError, RuntimeError) as error:
         sys.exit(str(error))
-    out = os.path.abspath(args.out or os.path.join(config.CANDIDATES, src.key + "-timestamps.json"))
+    out = os.path.abspath(args.out or os.path.join(
+        config.CANDIDATES, f"{profile.clip_prefix}-{src.key}-timestamps.json"))
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2, ensure_ascii=False)

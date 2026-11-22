@@ -3,6 +3,11 @@
 Additive modules in `campaign/`. They reuse `clip.py` helpers but do not change it,
 and they never publish. Only use sources you are authorized to record and repost.
 
+This document describes the original KreekCraft walkthrough. For the current
+two-campaign rules, profiles, CLI flags and publishing policy, see
+[CAMPAIGNS.md](CAMPAIGNS.md). The pipeline is profile-driven and keeps
+`kreekcraft` as the default for backward compatibility.
+
 ## Why stage 0 exists
 
 Audio peaks are not gameplay. An early "Woo!" chant and a later conversation both

@@ -1,4 +1,4 @@
-"""Stage 4: automated quality/compliance checks before manual promotion."""
+"""Stage 4: campaign-aware quality/compliance checks before manual promotion."""
 import hashlib
 import json
 import os
@@ -6,7 +6,11 @@ import re
 import subprocess
 from datetime import datetime, timezone
 
-from . import config, gameplay, metadata
+from . import config, gameplay
+from campaigns.base import rule_check
+from shared import focus as focus_module
+from shared import storage
+from shared import thumbnails as thumbnail_module
 
 TIME_RE = re.compile(r"(\d+):(\d+):(\d+),(\d+)\s*-->\s*(\d+):(\d+):(\d+),(\d+)")
 
@@ -38,7 +42,7 @@ def probe(path):
 
 
 def check(name, passed, detail):
-    return {"name": name, "passed": bool(passed), "detail": str(detail)}
+    return rule_check(name, passed, detail)
 
 
 def sha256_file(path):
@@ -58,6 +62,7 @@ def integrity_record(report, paths):
     if not video or not os.path.isfile(video):
         return None
     identity = {
+        "campaign_id": report.get("campaign_id"),
         "source_key": src.get("key"),
         "source_url": src.get("url"),
         "source_start": report.get("source_start"),
@@ -75,9 +80,18 @@ def integrity_record(report, paths):
     }
 
 
-def validate(report, meta, paths, final_dir=None, current_name=None, timeline=None):
+def validate(report, meta, paths, final_dir=None, current_name=None, timeline=None,
+             focus=None, known_thumbnails=None, campaign_id=None):
     """Return a validation dict; no file is moved or published here."""
+    profile = config.active_profile(campaign_id or report.get("campaign_id")
+                                    or meta.get("campaign_id"))
     checks = []
+    checks.extend(profile.campaign_checks(
+        campaign_id, report.get("campaign_id"), meta.get("campaign_id"),
+        (report.get("campaign") or {}).get("id"),
+        (meta.get("campaign") or {}).get("id")))
+    if timeline and timeline.get("campaign_id"):
+        checks.extend(profile.campaign_checks(timeline["campaign_id"]))
     src = report.get("source", {})
     video = paths["video"]
     info = probe(video)
@@ -85,10 +99,9 @@ def validate(report, meta, paths, final_dir=None, current_name=None, timeline=No
     video_stream = streams.get("video", {})
     duration = float(info.get("format", {}).get("duration") or 0.0)
     checks.append(check("video_exists", os.path.isfile(video), video))
-    checks.append(check("resolution_1080x1920",
-                        (video_stream.get("width"), video_stream.get("height")) == (1080, 1920),
-                        f"{video_stream.get('width')}x{video_stream.get('height')}"))
-    checks.append(check("duration_5_to_60s", 5.0 <= duration <= 60.0, f"{duration:.2f}s"))
+    checks.extend(profile.video_checks(info))
+    checks.append(check("duration_5_to_60s",
+                        5.0 <= duration <= 60.0, f"{duration:.2f}s"))
     stats = report.get("gameplay") or {}
     if timeline and not report.get("test"):
         stats = gameplay.window_stats(report.get("source_start", 0.0),
@@ -112,31 +125,39 @@ def validate(report, meta, paths, final_dir=None, current_name=None, timeline=No
     checks.append(check("srt_no_overlap", overlaps == 0, f"{overlaps} overlap(s)"))
     checks.append(check("hook_in_first_2s", bool(intervals) and intervals[0][0] <= 1.0,
                         f"first cue at {intervals[0][0]:.2f}s" if intervals else "no cues"))
-    caption = meta.get("caption_text", "")
-    checks.append(check("exact_campaign_phrase", config.CAMPAIGN_CAPTION in caption,
-                        config.CAMPAIGN_CAPTION))
-    missing = [tag for tag in config.HASHTAGS if tag not in caption]
-    checks.append(check("hashtags_all_present", not missing, f"missing: {missing}" if missing else "all present"))
-    text_fields = " ".join(meta.get(key, "") for key in
-                           ("caption_text", "youtube_description", "instagram_caption"))
-    urls = metadata.URL_PATTERN.findall(text_fields)
-    checks.append(check("no_urls_in_captions", not urls, f"found {urls}" if urls else "none"))
-    logo = report.get("logo_overlay")
-    logo_file = report.get("logo_file") or (config.logo_path(logo) if logo else None)
-    checks.append(check("logo_overlay_applied", bool(logo_file) and os.path.isfile(logo_file),
-                        logo_file or "missing"))
+
+    # Campaign-specific caption, source and editing rules (no cross-profile leakage).
+    checks.extend(profile.caption_checks(meta))
+    checks.extend(profile.source_checks(src, bool(report.get("test"))))
+
+    report_for_rules = report
+    if profile.editing.logo_required and report.get("logo_overlay") and not report.get("logo_file"):
+        report_for_rules = dict(report)
+        try:
+            report_for_rules["logo_file"] = config.logo_path(report.get("logo_overlay"), profile.id)
+        except ValueError:
+            pass
+    checks.extend(profile.editing_checks(report_for_rules))
+
+    focus_result = None
+    if profile.editing.subject_focus_required:
+        if focus is None:
+            focus_result = focus_module.analyze_focus(video, 0.0, duration)
+        else:
+            focus_result = focus
+        checks.extend(focus_module.focus_checks(focus_result, profile))
+
+    thumb = meta.get("thumbnail")
+    known = known_thumbnails if known_thumbnails is not None else storage.known_thumbnails()
+    checks.extend(profile.thumbnail_checks(thumb, known))
+    checks.extend(thumbnail_module.thumbnail_file_checks(thumb))
+
     transcript_words = [word.strip(".,!?\"'").lower() for word in (report.get("transcript") or "").split()]
     checks.append(check("transcript_present", bool(transcript_words),
                         f"{len(transcript_words)} words"))
     unique_words = len(set(transcript_words))
     checks.append(check("transcript_substance", len(transcript_words) >= 12 and unique_words >= 8,
                         f"{len(transcript_words)} words, {unique_words} unique"))
-    if report.get("test"):
-        checks.append(check("source_authorized", True, "local test source; not publishable"))
-    else:
-        channel = (src.get("channel") or "").lower()
-        checks.append(check("source_authorized", bool(src.get("url")) and channel in {"kreek", "kreekcraft"},
-                            f"{src.get('channel')} / {src.get('url')}"))
     duplicate = False
     duplicate_detail = "no existing final clips"
     if final_dir and os.path.isdir(final_dir):
@@ -150,6 +171,8 @@ def validate(report, meta, paths, final_dir=None, current_name=None, timeline=No
                     other = json.load(handle)
             except (OSError, ValueError):
                 continue
+            if storage.infer_campaign(other, name) != profile.id:
+                continue
             other_src = other.get("source", {})
             if (other_src.get("url") == src.get("url")
                     and abs(float(other.get("source_start") or 0) - float(report.get("source_start") or 0)) < 20):
@@ -162,18 +185,21 @@ def validate(report, meta, paths, final_dir=None, current_name=None, timeline=No
     warnings = [item for item in checks if not item["passed"]]
     return {
         "stage": "validate",
+        "campaign_id": profile.id,
+        "campaign": {"id": profile.id, "name": profile.name},
         "video": os.path.basename(video),
         "passed": not warnings,
         "checks": checks,
         "warnings": warnings,
         "gameplay": stats,
+        "focus": focus_result,
+        "thumbnail": thumb,
         "integrity": integrity_record(report, paths),
-        "human_review_still_required": [
-            "KreekCraft is the primary focus",
-            "logo is visibly present throughout",
-            "context is accurate and the hook works",
-            "campaign engagement/audience requirements",
+        "operational_guides": [
+            {"name": name, "status": "operator-supplied original required; not in repository"}
+            for name in profile.operational_guides
         ],
+        "human_review_still_required": list(profile.manual_review),
     }
 
 

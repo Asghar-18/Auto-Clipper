@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 
 from . import config, metadata, validate
+from shared import storage, thumbnails as thumbnail_module
 
 
 def candidate_contact_sheet(video, report, out_path, columns=4, rows=3):
@@ -91,24 +92,42 @@ def _promote_one(name, report, paths, enriched, validation):
         raise ValueError("promoted MP4 failed integrity verification; refusing to record final metadata")
     if integrity.get("srt_sha256") and validate.sha256_file(final_srt) != integrity["srt_sha256"]:
         raise ValueError("promoted SRT failed integrity verification; refusing to record final metadata")
+    record = dict(enriched)
+    record["clip_id"] = name
+    record["video_path"] = os.path.abspath(final_video)
+    record["srt_path"] = os.path.abspath(final_srt)
     with open(final_json, "w", encoding="utf-8") as handle:
-        json.dump(enriched, handle, indent=2, ensure_ascii=False)
+        json.dump(record, handle, indent=2, ensure_ascii=False)
     return final_video, final_srt, final_json
 
 
-def validate_candidate(path):
+def validate_candidate(path, campaign_id=None):
     """Validate one candidate and write its metadata/validation reports."""
     name, report, paths = load_candidate(path)
-    meta = metadata.build(report, report.get("source", {}))
+    stamped = report.get("campaign_id") or (report.get("campaign") or {}).get("id")
+    inferred = stamped or storage.infer_campaign(report, name)
+    if campaign_id and inferred and inferred != campaign_id:
+        raise ValueError(
+            f"candidate belongs to campaign {inferred!r}, not {campaign_id!r}")
+    effective = campaign_id or inferred
+    if not effective:
+        raise ValueError(
+            "candidate has no unambiguous campaign; pass --campaign or stamp the render JSON")
+    meta = metadata.build(report, report.get("source", {}), effective)
+    profile = config.active_profile(meta["campaign_id"])
     timeline = None
     if not report.get("test") and report.get("source", {}).get("url"):
         from .analyze import load_gameplay_timeline
-        timeline = load_gameplay_timeline(os.path.join(
-            config.METADATA, report["source"]["key"] + "-gameplay-timeline.json"))
+        src_key = report["source"]["key"]
+        timeline_file = config.timeline_path(src_key, profile.id)
+        timeline = load_gameplay_timeline(timeline_file, profile.id)
     contact = candidate_contact_sheet(paths["video"], report, os.path.join(
         config.THUMBNAILS, name + "-contact.jpg"))
+    # Every clip gets a real-frame thumbnail before validation/publishing.
+    meta["thumbnail"] = thumbnail_module.generate_thumbnail(paths["video"], name)
     validation = validate.validate(report, meta, paths, config.FINAL,
-                                   current_name=name, timeline=timeline)
+                                   current_name=name, timeline=timeline,
+                                   campaign_id=profile.id)
     validation_path = validate.write_report(validation, name)
     enriched = dict(report)
     enriched.update(meta)
@@ -146,6 +165,7 @@ def validate_candidate(path):
 
 def _print_result(result):
     validation = result["validation"]
+    print("campaign:", result["meta"]["campaign_id"])
     print("title:", result["meta"]["title"])
     print("caption:", result["meta"]["caption_text"].replace("\n", " | "))
     print("checks:", sum(1 for item in validation["checks"] if item["passed"]),
@@ -217,6 +237,9 @@ def verify_clip_integrity(path, data=None):
     recorded = validation.get("integrity") or {}
     if not recorded.get("content_sha256"):
         raise ValueError("validation report has no integrity record; re-run campaign.finalize validation")
+    campaign_id = (data.get("campaign_id") or (data.get("campaign") or {}).get("id"))
+    if recorded.get("campaign_id") and campaign_id and recorded["campaign_id"] != campaign_id:
+        raise ValueError("clip campaign does not match the campaign that was validated")
 
     # 1. The metadata must describe the same source window that was validated.
     for key in ("source_key", "source_url", "source_start", "source_end"):
@@ -330,6 +353,7 @@ def review_status(argv=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--campaign", help="campaign id (default: GTA_CAMPAIGN or kreekcraft)")
     parser.add_argument("--candidate", action="append", default=[],
                         help="render JSON from campaign.render (repeatable)")
     parser.add_argument("--candidates-from", action="append", default=[],
@@ -346,7 +370,7 @@ def main(argv=None):
     candidates = []
     for path in paths:
         try:
-            result = validate_candidate(path)
+            result = validate_candidate(path, args.campaign)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             sys.exit(f"Could not validate {path}: {error}")
         candidates.append(result)

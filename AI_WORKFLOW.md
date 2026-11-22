@@ -14,6 +14,8 @@ This is the short public runbook. The paid guide adds setup screenshots, reusabl
 
 For sleep-time scheduling, set the Zernio API key and account IDs outside the prompt. A scheduled post can go live while the computer sleeps; discovering streams and rendering clips cannot.
 
+For the KreekCraft or Dylan Page campaign, use the profile-driven VOD pipeline and [docs/CAMPAIGNS.md](docs/CAMPAIGNS.md) instead of treating both creators as one source list. Pass `--campaign kreekcraft|dylan_page`, keep each clip's campaign stamp, and never reuse the other campaign's caption, logo, platforms or source.
+
 For a no-plugin, copy-and-paste assistant prompt, see [GTA-CLIPPING-PROMPT.txt](GTA-CLIPPING-PROMPT.txt). Pasting the prompt requires no special AI setup; creating clips automatically still requires access to this project and its local dependencies.
 
 ## Standing unattended mode

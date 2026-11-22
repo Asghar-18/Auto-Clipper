@@ -1,6 +1,6 @@
 # GTA Auto Clipper
 
-Find high-energy moments in live gameplay and render full-screen 9:16 clips with pop-up captions: each word pops in yellow the moment it is spoken. The clipper runs on your computer. A separate Zernio command can schedule the finished clip to your connected YouTube and Instagram accounts.
+Find high-energy moments in live gameplay and render full-screen 9:16 clips with pop-up captions: each word pops in yellow the moment it is spoken. The clipper runs on your computer. One profile-driven pipeline serves two independent campaigns (KreekCraft GTA 6 and Dylan Page GTA 6 Marathon). A separate Zernio command can schedule a reviewed clip to its campaign's connected TikTok, Instagram, YouTube or X accounts. See [docs/CAMPAIGNS.md](docs/CAMPAIGNS.md).
 
 The software is free and MIT-licensed. The optional AI workflow guide and prompt pack are a separate digital product.
 
@@ -71,31 +71,65 @@ Test a local video first. Test output goes to `test_out/` and cannot be publishe
 python clip.py --file "C:\videos\gameplay.mp4" --test --clip-len 30
 ```
 
-## Schedule to YouTube + Instagram
+## Campaigns
 
-Connect your YouTube account and an Instagram Creator or Business account to Zernio. Set the key and account IDs as private environment variables:
+The VOD pipeline keeps creator rules separate in `campaigns/`. A clip belongs to
+exactly one campaign (`kreekcraft` or `dylan_page`); campaign stamps, source
+caches, gameplay timelines, filenames and exclusion ranges are isolated.
+
+```powershell
+$env:GTA_CAMPAIGN = "dylan_page"   # omit for the default kreekcraft campaign
+python -m campaign.gameplay --url "VIDEO_URL" --campaign dylan_page
+python -m campaign.analyze --url "VIDEO_URL" --campaign dylan_page --start 0
+python -m campaign.select --url "VIDEO_URL" --campaign dylan_page --start 0 --top 5
+python -m campaign.render --url "VIDEO_URL" --campaign dylan_page --timestamps "output/candidates/dylan-KEY-alternatives.json" --rank 1
+python -m campaign.finalize --campaign dylan_page --select output/candidates
+```
+
+Finalize generates a real-frame thumbnail for every clip and records campaign,
+source, validation, approval and thumbnail details in the clip JSON. Dylan clips
+also get face-presence sampling and are flagged for manual review when focus is
+uncertain; identity is never claimed or auto-verified.
+
+## Schedule to a campaign's platforms
+
+Connect the relevant accounts in Zernio and set the key plus only the account IDs
+you need as private environment variables:
 
 ```powershell
 $env:ZERNIO_API_KEY = "YOUR_ZERNIO_API_KEY"
 $env:ZERNIO_YOUTUBE_ACCOUNT_ID = "YOUR_YOUTUBE_ACCOUNT_ID"
 $env:ZERNIO_INSTAGRAM_ACCOUNT_ID = "YOUR_INSTAGRAM_ACCOUNT_ID"
+$env:ZERNIO_TIKTOK_ACCOUNT_ID = "YOUR_TIKTOK_ACCOUNT_ID"
+$env:ZERNIO_X_ACCOUNT_ID = "YOUR_X_ACCOUNT_ID"
 ```
 
-Review the clip and its JSON metadata, then mark the metadata `"approved": true`. Preview the schedule first:
+Review the MP4, contact sheet, focus/thumbnail reports and JSON metadata, then record explicit approval:
 
 ```powershell
-python zernio_publish.py "output\gta-CLIP-ID" --scheduled-for "2026-11-18T12:00:00+05:30"
+python -m campaign.finalize review-status "output\final\dylan-CLIP-ID" --status approved --reviewer "Initials" --approve
 ```
 
-The dry run sends nothing. To schedule the post to both accounts, add `--publish`:
+Preview the schedule first:
 
 ```powershell
-python zernio_publish.py "output\gta-CLIP-ID" --scheduled-for "2026-11-18T12:00:00+05:30" --publish
+python zernio_publish.py "output\final\dylan-CLIP-ID" --platform all --scheduled-for "2026-11-18T12:00:00+05:30"
+```
+
+The dry run sends nothing. `--platform both` keeps the legacy YouTube+Instagram
+selection; use `all` (or `campaign`) for the campaign's full allowlist, or a
+comma-separated list such as `tiktok,twitter`. X uses the `twitter` Zernio key;
+`x` is accepted as an alias. The publisher checks campaign, video, caption,
+thumbnail, allowed platforms, missing connections and explicit approval before
+any request. To schedule, add `--publish`:
+
+```powershell
+python zernio_publish.py "output\final\dylan-CLIP-ID" --platform all --scheduled-for "2026-11-18T12:00:00+05:30" --publish
 ```
 
 For unattended posting, first make sure the AI agent is restricted to sources you have the right to use and that you have tested its output. Then set `GTA_UNATTENDED_POSTS=1` in the machine's private environment and run with `--publish --unattended`. A scheduled post already accepted by Zernio can publish while your computer is asleep. Discovery and clip rendering still require an awake, connected runner.
 
-`publish.py` is the same command as `zernio_publish.py`, but it also accepts the generic variable names `PUBLISH_API_KEY`, `PUBLISH_YOUTUBE_ACCOUNT_ID` and `PUBLISH_INSTAGRAM_ACCOUNT_ID`, so either spelling works: `python publish.py "output\gta-CLIP-ID" --publish --unattended --scheduled-for "FUTURE_ISO_TIME"`. To post to many channels with an equal share, use [GTA Auto Sender](https://github.com/AnIntellectualBeing/GTA-Auto-Sender).
+`publish.py` is the same command as `zernio_publish.py`, but it also accepts the generic variable names `PUBLISH_API_KEY`, `PUBLISH_YOUTUBE_ACCOUNT_ID`, `PUBLISH_INSTAGRAM_ACCOUNT_ID`, `PUBLISH_TIKTOK_ACCOUNT_ID` and `PUBLISH_X_ACCOUNT_ID`, so either spelling works: `python publish.py "output\final\dylan-CLIP-ID" --platform all --publish --unattended --scheduled-for "FUTURE_ISO_TIME"`. To post to many channels with an equal share, use [GTA Auto Sender](https://github.com/AnIntellectualBeing/GTA-Auto-Sender).
 
 The publisher stores the Zernio post ID and an idempotency key in the metadata. If an API call fails, check the Zernio dashboard before retrying.
 
@@ -107,7 +141,7 @@ For an AI that can access this project folder, [AI_WORKFLOW.md](AI_WORKFLOW.md) 
 
 ## Rights and platform notes
 
-This release has no creator allowlist; the user chooses the source. You are responsible for obtaining rights and permissions to record, edit, and publish the footage. Creator credit does not replace permission. YouTube search ranking does not report a verified live concurrent-viewer leaderboard. This independent fan project is not affiliated with Rockstar Games, Take-Two Interactive, YouTube, Instagram, Meta, or Zernio.
+The live-capture tool still has no repository allowlist; the user chooses the source. The campaign pipeline does enforce source policies: KreekCraft accepts only official KreekCraft YouTube/Twitch footage, and Dylan Page accepts only marathon footage dated 2026-11-19 or later. You remain responsible for obtaining rights and permissions to record, edit, and publish the footage. Creator credit does not replace permission. Account metrics, warmup, approval and targeting guides are operator-supplied campaign requirements, not pipeline guarantees. YouTube search ranking does not report a verified live concurrent-viewer leaderboard. This independent fan project is not affiliated with Rockstar Games, Take-Two Interactive, YouTube, Instagram, Meta, X, TikTok, or Zernio.
 
 ## License
 
