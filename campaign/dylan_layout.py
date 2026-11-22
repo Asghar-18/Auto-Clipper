@@ -114,6 +114,32 @@ def facecam_box(video_path, start, length, sample_interval=SAMPLE_INTERVAL):
             int(width * fw), int(height * fh))
 
 
+TOP_PANEL_W = 1080
+TOP_PANEL_H = 960
+
+
+def top_panel_chain(box):
+    """ffmpeg filter chain that turns the source frame into the 1080x960 top panel."""
+    x, y, width, height = box
+    return (f"crop={width}:{height}:{x}:{y},"
+            f"scale={TOP_PANEL_W}:{TOP_PANEL_H}:force_original_aspect_ratio=increase,"
+            f"crop={TOP_PANEL_W}:{TOP_PANEL_H}")
+
+
+def visible_source_box(box):
+    """Source-pixel ``(x, y, w, h)`` that actually appears in the top panel.
+
+    ``top_panel_chain`` scales to cover 1080x960 and centre-crops, so a region
+    whose aspect is not 9:8 loses its edges. A 960x540 region keeps only its
+    middle ~607 px of width.
+    """
+    x, y, width, height = box
+    scale = max(TOP_PANEL_W / float(width), TOP_PANEL_H / float(height))
+    vis_w = TOP_PANEL_W / scale
+    vis_h = TOP_PANEL_H / scale
+    return (x + (width - vis_w) / 2.0, y + (height - vis_h) / 2.0, vis_w, vis_h)
+
+
 def build_stacked_filter(ass_name, box):
     """Dylan-only 9:16 stack: tight fixed facecam over a wide gameplay panel.
 
@@ -121,11 +147,9 @@ def build_stacked_filter(ass_name, box):
     and never pans. The lower 1080x960 panel shows the full source width. No
     branding or blurred filler is added.
     """
-    x, y, width, height = box
     graph = (
         "[0:v]setpts=PTS-STARTPTS,split=2[face][game];"
-        f"[face]crop={width}:{height}:{x}:{y},"
-        "scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960[top];"
+        f"[face]{top_panel_chain(box)}[top];"
         "[game]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960[bottom];"
         f"[top][bottom]vstack=inputs=2,ass={ass_name}[out]"
     )

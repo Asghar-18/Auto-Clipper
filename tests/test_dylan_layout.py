@@ -105,6 +105,31 @@ class DylanLayoutTests(unittest.TestCase):
         self.assertIn('[1:v]scale=1080:-2[logo]', graph)
         self.assertIn('overlay=0:24:shortest=0[out]', graph)
 
+    def test_stacked_filter_top_chain_is_unchanged(self):
+        graph = dylan_layout.build_stacked_filter('cap.ass', (960, 0, 960, 540))
+        self.assertIn('[face]crop=960:540:960:0,'
+                      'scale=1080:960:force_original_aspect_ratio=increase,'
+                      'crop=1080:960[top]', graph)
+
+    def test_visible_source_box_shows_16x9_region_loses_its_sides(self):
+        x, y, w, h = dylan_layout.visible_source_box((960, 0, 960, 540))
+        self.assertAlmostEqual(x, 1136.25, places=2)
+        self.assertAlmostEqual(w, 607.5, places=2)
+        self.assertAlmostEqual(y, 0.0, places=2)
+        self.assertAlmostEqual(h, 540.0, places=2)
+        # A 9:8 region is shown whole.
+        self.assertEqual(tuple(round(v) for v in
+                               dylan_layout.visible_source_box((100, 50, 540, 480))),
+                         (100, 50, 540, 480))
+
+    def test_preview_parses_grid_cells(self):
+        from campaign import top_panel_preview as preview
+        self.assertEqual(preview.parse_cells('A5:D8'), (0.5, 0.0, 0.5, 0.5))
+        self.assertEqual(preview.parse_cells('d8:a5'), (0.5, 0.0, 0.5, 0.5))
+        self.assertEqual(preview.parse_cells('B6:B6'), (0.625, 0.125, 0.125, 0.125))
+        with self.assertRaises(ValueError):
+            preview.parse_cells('Z9:A1')
+
 
 if __name__ == '__main__':
     unittest.main()
