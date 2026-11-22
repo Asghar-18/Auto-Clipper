@@ -152,10 +152,12 @@ class DylanLayoutTests(unittest.TestCase):
                 profile, 'cap.ass', 's.mp4', 0.0, 30.0, video_id='i1zUT_gKQzA')
         self.assertTrue(adaptive)
         self.assertIn('[face]crop=640:569:1200:0,', graph)
+        self.assertIn('[game]crop=1215:1080:101:0,', graph)
 
     def test_gameplay_region_crops_bottom_panel_only_when_set(self):
-        self.assertIsNone(dylan_layout.gameplay_box(1920, 1080))
-        box = dylan_layout.gameplay_box(1920, 1080, (101 / 1920, 0.0, 1215 / 1920, 1.0))
+        box = dylan_layout.gameplay_box(1920, 1080)   # confirmed default
+        self.assertEqual(box, dylan_layout.gameplay_box(
+            1920, 1080, (101 / 1920, 0.0, 1215 / 1920, 1.0)))
         self.assertEqual(box, (101, 0, 1215, 1080))
         self.assertLessEqual(box[0] + box[2], 1316)   # stops before the webcam window
         graph = dylan_layout.build_stacked_filter('c.ass', (1316, 0, 604, 537), box)

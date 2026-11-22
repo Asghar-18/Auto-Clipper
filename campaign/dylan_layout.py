@@ -31,7 +31,8 @@ FACEBOX_REGION = (1316 / 1920, 0.0, 604 / 1920, 537 / 1080)
 # Per-video overrides for VODs with a different overlay layout.
 FACEBOX_OVERRIDES = {
     # "120 Hours Marathon Best Moments": larger webcam window starting further
-    # left, no timer (1200,0,640,569 on 1920x1080).
+    # left, no timer (1200,0,640,569 on 1920x1080). Excluded from the campaign
+    # set: its webcam moves between edits and it has burned-in subtitles.
     "i1zUT_gKQzA": (1200 / 1920, 0.0, 640 / 1920, 569 / 1080),
 }
 
@@ -41,8 +42,9 @@ TOP_PANEL_H = 960
 
 # Gameplay (bottom) panel source region as fractions, or None for the full
 # frame centre-cropped to 9:8 (source x ~352-1568, which also catches part of
-# the webcam overlay at the right edge).
-GAMEPLAY_REGION = None
+# the webcam overlay at the right edge). Operator-confirmed: 101,0,1215,1080
+# on 1920x1080 -- full height, 9:8, ending at x=1316 just before the webcam.
+GAMEPLAY_REGION = (101 / 1920, 0.0, 1215 / 1920, 1.0)
 
 
 def gameplay_box(width, height, region=None):

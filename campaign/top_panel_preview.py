@@ -28,6 +28,7 @@ from . import dylan_layout, source as source_module
 GRID = 8
 ROWS = "ABCDEFGH"
 # User-confirmed gameplay starts; sample 10 s in so the frame is mid-gameplay.
+# i1zUT_gKQzA (Best Moments) is excluded: moving webcam, burned-in subtitles.
 DYLAN_VODS = [
     ("xFcI47X15Lo", "DAY 2", 12120),
     ("FI5ZXVYuD04", "DAY 2 Part 2", 7800),
@@ -35,7 +36,6 @@ DYLAN_VODS = [
     ("-6PVU387zOo", "DAY 3 Part 2", 14100),
     ("cq7OxWhmgHA", "DAY 4", 2000),
     ("LEAdEczRNEc", "DAY 4 Part 2", 13200),
-    ("i1zUT_gKQzA", "120h Best Moments", 420),
 ]
 SAMPLE_OFFSET = 10
 
