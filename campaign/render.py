@@ -76,7 +76,9 @@ def compose_filter(profile, ass_name, media_path, start, length, has_logo=False,
             if profile.video.layout == "adaptive-stacked":
                 box = dylan_layout.facecam_box(media_path, start, length, video_id=video_id)
                 if box:
-                    return dylan_layout.build_stacked_filter(ass_name, box), True
+                    game_box = dylan_layout.gameplay_box(
+                        *dylan_layout.source_dimensions(media_path))
+                    return dylan_layout.build_stacked_filter(ass_name, box, game_box), True
             else:
                 return dylan_layout.build_filter(ass_name, keys), True
     return build_filter(ass_name, logo_supported=has_logo), False

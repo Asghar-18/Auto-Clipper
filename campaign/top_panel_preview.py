@@ -3,9 +3,9 @@
 For each source frame it draws an 8x8 labeled grid (rows A-H, columns 1-8,
 each cell 1/8 of the frame), a red outline of the configured region (the
 per-video override when one exists, else FACEBOX_REGION),
-and a green outline of the part that actually appears in the 1080x960 top
-panel. Beside the frame it shows the real top-panel output, built with the same
-filter chain the renderer uses.
+a green outline of the part that actually appears in the 1080x960 top panel,
+and a blue outline of the gameplay (bottom) panel. Beside the frame it shows the
+full 1080x1920 output (without captions), built with the renderer's filter chains.
 
 Use it to name the grid cells that hold Dylan's webcam, e.g. "B6:D8".
 
@@ -13,6 +13,7 @@ Use it to name the grid cells that hold Dylan's webcam, e.g. "B6:D8".
     python -m campaign.top_panel_preview --source URL_OR_FILE --at 12130
     python -m campaign.top_panel_preview --dylan-vods --cells B6:D8   # try a region
     python -m campaign.top_panel_preview --dylan-vods --region 1316,0,604,537
+    python -m campaign.top_panel_preview --dylan-vods --gameplay-region 101,0,1215,1080
 """
 import argparse
 import os
@@ -72,10 +73,12 @@ def grab_frame(media, at, out_png):
     return out_png
 
 
-def top_panel(frame_png, box, out_png):
-    subprocess.run(["ffmpeg", "-v", "error", "-i", frame_png,
-                    "-vf", dylan_layout.top_panel_chain(box),
-                    "-frames:v", "1", "-y", out_png], check=True)
+def stacked_frame(frame_png, box, game_box, out_png):
+    """The real 1080x1920 composition (no captions) for one frame."""
+    graph = (f"[0:v]split=2[a][b];[a]{dylan_layout.top_panel_chain(box)}[t];"
+             f"[b]{dylan_layout.bottom_panel_chain(game_box)}[g];[t][g]vstack=inputs=2[out]")
+    subprocess.run(["ffmpeg", "-v", "error", "-i", frame_png, "-filter_complex", graph,
+                    "-map", "[out]", "-frames:v", "1", "-y", out_png], check=True)
     return out_png
 
 
@@ -88,7 +91,7 @@ def _font(size):
     return ImageFont.load_default()
 
 
-def annotate(frame_png, box, label):
+def annotate(frame_png, box, label, game_box=None):
     frame = Image.open(frame_png).convert("RGB")
     width, height = frame.size
     draw = ImageDraw.Draw(frame)
@@ -105,23 +108,30 @@ def annotate(frame_png, box, label):
     draw.rectangle([x, y, x + w - 1, y + h - 1], outline=(255, 0, 0), width=6)
     vx, vy, vw, vh = dylan_layout.visible_source_box(box)
     draw.rectangle([vx, vy, vx + vw - 1, vy + vh - 1], outline=(0, 255, 0), width=6)
+    if game_box is None:  # default bottom panel: full-height 9:8 centre crop
+        gw = height * dylan_layout.TOP_PANEL_W / dylan_layout.TOP_PANEL_H
+        game_box = ((width - gw) / 2, 0, gw, height)
+    gx, gy, gw, gh = dylan_layout.visible_source_box(game_box) if len(game_box) == 4 else game_box
+    draw.rectangle([gx + 3, gy + 3, gx + gw - 4, gy + gh - 4], outline=(0, 160, 255), width=6)
     big = _font(max(20, height // 22))
     draw.text((12, height - big.size - 16), label, fill=(255, 255, 255), font=big,
               stroke_width=3, stroke_fill=(0, 0, 0))
     return frame
 
 
-def build_row(media, at, label, region, work):
+def build_row(media, at, label, region, work, game_region=None):
     stem = re.sub(r"[^A-Za-z0-9]+", "_", label)
     frame_png = grab_frame(media, at, os.path.join(work, stem + "_frame.png"))
     width, height = Image.open(frame_png).size
     box = region_box(region, width, height)
-    panel = Image.open(top_panel(frame_png, box, os.path.join(work, stem + "_top.png")))
-    frame = annotate(frame_png, box, label).resize((1920, 1080))
-    panel = panel.resize((1215, 1080))  # 1080x960 shown at the same height as the frame
-    row = Image.new("RGB", (1920 + 30 + 1215, 1080), (30, 30, 30))
+    game_box = dylan_layout.gameplay_box(width, height, game_region)
+    stacked = Image.open(stacked_frame(frame_png, box, game_box,
+                                       os.path.join(work, stem + "_stack.png")))
+    frame = annotate(frame_png, box, label, game_box).resize((1920, 1080))
+    stacked = stacked.resize((608, 1080))  # full 9:16 output at the frame's height
+    row = Image.new("RGB", (1920 + 30 + 608, 1080), (30, 30, 30))
     row.paste(frame, (0, 0))
-    row.paste(panel, (1950, 0))
+    row.paste(stacked, (1950, 0))
     return row
 
 
@@ -142,6 +152,8 @@ def main(argv=None):
     parser.add_argument("--cells", help="preview a grid region instead of FACEBOX_REGION, e.g. B6:D8")
     parser.add_argument("--region", help="preview a pixel region x,y,w,h on a 1920x1080 "
                         "frame, e.g. 1316,0,604,537 (use a 9:8 shape to avoid side cropping)")
+    parser.add_argument("--gameplay-region", help="bottom-panel pixel region x,y,w,h on a "
+                        "1920x1080 frame (9:8 shape), e.g. 101,0,1215,1080 to leave out the webcam")
     parser.add_argument("--out", default=os.path.join(
         "output", "thumbnails", "top-panel-preview", "top-panel-preview.jpg"))
     args = parser.parse_args(argv)
@@ -156,6 +168,8 @@ def main(argv=None):
         forced = parse_cells(args.cells)
     else:
         forced = None
+
+    game_region = parse_region(args.gameplay_region) if args.gameplay_region else None
 
     def region_for(video_id):
         return forced or dylan_layout.facebox_region(video_id)
@@ -181,7 +195,7 @@ def main(argv=None):
                     media, seek = src, at
                 else:
                     media, seek = fetch(src, at, work, f"src{index}"), 0.5
-                rows.append(build_row(media, seek, label, region, work))
+                rows.append(build_row(media, seek, label, region, work, game_region))
             except Exception as error:  # keep going; one bad VOD shouldn't block the sheet
                 print(f"  skipped: {error}")
     if not rows:
@@ -198,7 +212,8 @@ def main(argv=None):
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     sheet.save(args.out, quality=88)
     print("Region:", args.region or args.cells or "per-video configured regions")
-    print("Red = selected region, green = what the top panel really shows.")
+    print("Red = top-panel region, green = what the top panel really shows, "
+          "blue = gameplay panel. Right: full 9:16 output (no captions).")
     print("Wrote", args.out)
 
 

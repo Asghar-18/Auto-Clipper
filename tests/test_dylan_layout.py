@@ -153,6 +153,17 @@ class DylanLayoutTests(unittest.TestCase):
         self.assertTrue(adaptive)
         self.assertIn('[face]crop=640:569:1200:0,', graph)
 
+    def test_gameplay_region_crops_bottom_panel_only_when_set(self):
+        self.assertIsNone(dylan_layout.gameplay_box(1920, 1080))
+        box = dylan_layout.gameplay_box(1920, 1080, (101 / 1920, 0.0, 1215 / 1920, 1.0))
+        self.assertEqual(box, (101, 0, 1215, 1080))
+        self.assertLessEqual(box[0] + box[2], 1316)   # stops before the webcam window
+        graph = dylan_layout.build_stacked_filter('c.ass', (1316, 0, 604, 537), box)
+        self.assertIn('[game]crop=1215:1080:101:0,scale=1080:960', graph)
+        default = dylan_layout.build_stacked_filter('c.ass', (1316, 0, 604, 537))
+        self.assertIn('[game]scale=1080:960:force_original_aspect_ratio=increase,'
+                      'crop=1080:960[bottom]', default)
+
     def test_preview_parses_pixel_region(self):
         from campaign import top_panel_preview as preview
         self.assertEqual(preview.parse_region('960, 0, 960, 540'), (0.5, 0.0, 0.5, 0.5))

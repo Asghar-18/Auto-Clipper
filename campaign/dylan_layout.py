@@ -36,6 +36,31 @@ FACEBOX_OVERRIDES = {
 }
 
 
+TOP_PANEL_W = 1080
+TOP_PANEL_H = 960
+
+# Gameplay (bottom) panel source region as fractions, or None for the full
+# frame centre-cropped to 9:8 (source x ~352-1568, which also catches part of
+# the webcam overlay at the right edge).
+GAMEPLAY_REGION = None
+
+
+def gameplay_box(width, height, region=None):
+    """Source-pixel ``(x, y, w, h)`` for the bottom panel, or None for centre crop."""
+    region = GAMEPLAY_REGION if region is None else region
+    if region is None:
+        return None
+    fx, fy, fw, fh = region
+    return (int(width * fx), int(height * fy), int(width * fw), int(height * fh))
+
+
+def bottom_panel_chain(box=None):
+    """ffmpeg chain for the 1080x960 gameplay panel."""
+    prefix = "" if box is None else "crop={2}:{3}:{0}:{1},".format(*box)
+    return (prefix + f"scale={TOP_PANEL_W}:{TOP_PANEL_H}:force_original_aspect_ratio=increase,"
+            f"crop={TOP_PANEL_W}:{TOP_PANEL_H}")
+
+
 def facebox_region(video_id=None):
     """Fractional top-panel region for ``video_id`` (default: live-VOD region)."""
     return FACEBOX_OVERRIDES.get(video_id, FACEBOX_REGION)
@@ -128,10 +153,6 @@ def facecam_box(video_path, start, length, sample_interval=SAMPLE_INTERVAL, vide
             int(width * fw), int(height * fh))
 
 
-TOP_PANEL_W = 1080
-TOP_PANEL_H = 960
-
-
 def top_panel_chain(box):
     """ffmpeg filter chain that turns the source frame into the 1080x960 top panel."""
     x, y, width, height = box
@@ -154,7 +175,7 @@ def visible_source_box(box):
     return (x + (width - vis_w) / 2.0, y + (height - vis_h) / 2.0, vis_w, vis_h)
 
 
-def build_stacked_filter(ass_name, box):
+def build_stacked_filter(ass_name, box, game_box=None):
     """Dylan-only 9:16 stack: tight fixed facecam over a wide gameplay panel.
 
     The upper 1080x960 panel crops the operator-confirmed webcam region
@@ -164,7 +185,7 @@ def build_stacked_filter(ass_name, box):
     graph = (
         "[0:v]setpts=PTS-STARTPTS,split=2[face][game];"
         f"[face]{top_panel_chain(box)}[top];"
-        "[game]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960[bottom];"
+        f"[game]{bottom_panel_chain(game_box)}[bottom];"
         f"[top][bottom]vstack=inputs=2,ass={ass_name}[out]"
     )
     return graph
