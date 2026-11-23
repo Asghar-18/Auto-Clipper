@@ -17,10 +17,12 @@ URL_PATTERN = re.compile(r"https?://|www\.", re.IGNORECASE)
 LEGACY_PREFIXES = {
     "kreek": "kreekcraft",
     "dylan": "dylan_page",
+    "boeshi": "boeshi",
 }
 LEGACY_MARKERS = {
     "kreekcraft": ("Watch KreekCraft on YouTube and Twitch", "#KreekCraft"),
     "dylan_page": ("#DylanPage",),
+    "boeshi": ("twitch.tv/darealboeshi",),
 }
 
 

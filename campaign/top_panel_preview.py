@@ -2,18 +2,18 @@
 
 For each source frame it draws an 8x8 labeled grid (rows A-H, columns 1-8,
 each cell 1/8 of the frame), a red outline of the configured region (the
-per-video override when one exists, else FACEBOX_REGION),
+campaign's per-video override when one exists, else its default region),
 a green outline of the part that actually appears in the 1080x960 top panel,
 and a blue outline of the gameplay (bottom) panel. Beside the frame it shows the
 full 1080x1920 output (without captions), built with the renderer's filter chains.
 
 Use it to name the grid cells that hold Dylan's webcam, e.g. "B6:D8".
 
-    python -m campaign.top_panel_preview --dylan-vods
-    python -m campaign.top_panel_preview --source URL_OR_FILE --at 12130
-    python -m campaign.top_panel_preview --dylan-vods --cells B6:D8   # try a region
-    python -m campaign.top_panel_preview --dylan-vods --region 1316,0,604,537
-    python -m campaign.top_panel_preview --dylan-vods --gameplay-region 101,0,1215,1080
+    python -m campaign.top_panel_preview --campaign dylan_page --dylan-vods
+    python -m campaign.top_panel_preview --campaign dylan_page --source URL_OR_FILE --at 12130
+    python -m campaign.top_panel_preview --campaign dylan_page --dylan-vods --cells B6:D8   # try a region
+    python -m campaign.top_panel_preview --campaign dylan_page --dylan-vods --region 1316,0,604,537
+    python -m campaign.top_panel_preview --campaign dylan_page --dylan-vods --gameplay-region 101,0,1215,1080
 """
 import argparse
 import os
@@ -23,7 +23,9 @@ import tempfile
 
 from PIL import Image, ImageDraw, ImageFont
 
-from . import dylan_layout, source as source_module
+from campaigns import ids
+
+from . import config, dylan_layout, source as source_module
 
 GRID = 8
 ROWS = "ABCDEFGH"
@@ -119,7 +121,7 @@ def annotate(frame_png, box, label, game_box=None):
     return frame
 
 
-def build_row(media, at, label, region, work, game_region=None):
+def build_row(media, at, label, region, work, game_region):
     stem = re.sub(r"[^A-Za-z0-9]+", "_", label)
     frame_png = grab_frame(media, at, os.path.join(work, stem + "_frame.png"))
     width, height = Image.open(frame_png).size
@@ -143,13 +145,14 @@ def fetch(url, start, work, name):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--campaign", required=True, help="campaign id (required): " + " | ".join(ids()))
     parser.add_argument("--dylan-vods", action="store_true",
                         help="sample all seven confirmed Dylan VODs")
     parser.add_argument("--source", action="append", default=[],
                         help="URL or local video file (repeatable; pair with --at)")
     parser.add_argument("--at", action="append", type=float, default=[],
                         help="timestamp in seconds for each --source")
-    parser.add_argument("--cells", help="preview a grid region instead of FACEBOX_REGION, e.g. B6:D8")
+    parser.add_argument("--cells", help="preview a grid region instead of the configured region, e.g. B6:D8")
     parser.add_argument("--region", help="preview a pixel region x,y,w,h on a 1920x1080 "
                         "frame, e.g. 1316,0,604,537 (use a 9:8 shape to avoid side cropping)")
     parser.add_argument("--gameplay-region", help="bottom-panel pixel region x,y,w,h on a "
@@ -169,10 +172,15 @@ def main(argv=None):
     else:
         forced = None
 
-    game_region = parse_region(args.gameplay_region) if args.gameplay_region else None
+    rules = config.active_profile(args.campaign).video
+    game_region = (parse_region(args.gameplay_region) if args.gameplay_region
+                   else rules.stacked_bottom_region)
 
     def region_for(video_id):
-        return forced or dylan_layout.facebox_region(video_id)
+        region = forced or dylan_layout.facebox_region(rules, video_id)
+        if region is None:
+            parser.error(f"campaign {args.campaign!r} has no top-panel region; pass --region")
+        return region
 
     jobs = []
     if args.dylan_vods:

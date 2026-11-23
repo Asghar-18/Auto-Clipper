@@ -1,6 +1,6 @@
-# Two-campaign pipeline
+# Three-campaign pipeline
 
-One application serves two independent campaigns. The clipper code, FFmpeg
+One application serves three independent campaigns. The clipper code, FFmpeg
 helpers, storyboard gating, Whisper captions, review workflow and Zernio client
 are shared. Creator-specific decisions live in `campaigns/`:
 
@@ -8,6 +8,11 @@ are shared. Creator-specific decisions live in `campaigns/`:
 | --- | --- | --- | --- | --- |
 | `kreekcraft` | Official KreekCraft GTA VI YouTube/Twitch only; no reuploads | TikTok, Instagram Reels, YouTube Shorts (X rejected) | Exact phrase `Watch KreekCraft on YouTube and Twitch` plus `#GTA6 #KreekCraft #GrandTheftAutoVI`; no URLs | Official KreekCraft overlay required throughout |
 | `dylan_page` | Dylan Page GTA VI marathon streams/VODs dated 2026-11-19 or later | TikTok, Instagram Reels, X, YouTube Shorts | `#DylanPage` in every caption; English; Kreek template/hashtags forbidden | No added watermark or third-party branding; original footage logos allowed |
+| `boeshi` (DRAFT) | Boeshi's own recent GTA VI Twitch VODs (twitch.tv/darealboeshi); cutoff date not set yet, so validation fails until it is | None yet (publishing blocked); own `ZERNIO_BOESHI_*` account variables; unattended mode refused | `twitch.tv/darealboeshi` in every caption, from rotating templates; English | Campaign overlay mandatory and visible throughout (`BOESHI_OVERLAY` or `assets/boeshi/overlay.png`); position not decided |
+
+Cross-campaign caption guards are derived in `campaigns/registry.py`: every
+profile automatically forbids the other profiles' exact phrases, required
+hashtags and required caption links.
 
 Add or change a campaign in `campaigns/<id>/profile.py` and register it in
 `campaigns/registry.py`. Do not add creator branches to the shared pipeline.
@@ -31,19 +36,20 @@ Add or change a campaign in `campaigns/<id>/profile.py` and register it in
    auto-approves a Dylan clip; uncertainty sets `manual_review` and blocks
    promotion/publishing.
 7. Dylan's 1080x1920 render uses a stacked layout when the face is large and
-   stable enough: a fixed upper panel crops the operator-selected top-right
-   source region (grid cells A3+A4+B3+B4) without panning; a lower panel shows
-   the full source width so gameplay stays readable. Otherwise it falls back to
-   the verified fit layout. Kreek always keeps the fit layout plus its official
-   overlay.
+   stable enough: a fixed upper panel shows the stream's webcam window and timer
+   (1316,0,604,537 on 1920x1080) without panning; a lower panel shows gameplay
+   ending just before the webcam (101,0,1215,1080). These regions live on the
+   Dylan profile (`VideoRules.stacked_*`), so no other campaign can inherit
+   them; a profile with no regions falls back to the fit layout. Kreek always
+   keeps the fit layout plus its official overlay.
+8. There is no default campaign. Every `campaign.*` command requires
+   `--campaign`; `GTA_CAMPAIGN` is no longer read. Unknown ids are errors.
 
 ## Commands
 
-Select the campaign explicitly or set `GTA_CAMPAIGN` in the private environment.
-The default remains `kreekcraft` so existing commands keep working.
+Every command must name its campaign with `--campaign` (there is no default).
 
 ```powershell
-$env:GTA_CAMPAIGN = "dylan_page"   # or pass --campaign on each command
 
 python -m campaign.gameplay --url "VIDEO_URL" --campaign dylan_page
 python -m campaign.analyze --url "VIDEO_URL" --campaign dylan_page --start 0

@@ -4,9 +4,9 @@ Additive modules in `campaign/`. They reuse `clip.py` helpers but do not change 
 and they never publish. Only use sources you are authorized to record and repost.
 
 This document describes the original KreekCraft walkthrough. For the current
-two-campaign rules, profiles, CLI flags and publishing policy, see
-[CAMPAIGNS.md](CAMPAIGNS.md). The pipeline is profile-driven and keeps
-`kreekcraft` as the default for backward compatibility.
+campaign rules, profiles, CLI flags and publishing policy, see
+[CAMPAIGNS.md](CAMPAIGNS.md). The pipeline is profile-driven; every command now
+requires `--campaign` (pass `--campaign kreekcraft` for this walkthrough).
 
 ## Why stage 0 exists
 

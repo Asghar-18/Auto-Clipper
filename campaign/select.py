@@ -18,6 +18,8 @@ import numpy as np
 
 import clip
 
+from campaigns import ids
+
 from . import analyze, captions, config, gameplay, source as source_module
 from shared import storage
 
@@ -155,7 +157,7 @@ def transcribe_window(audio_path, start, length, work_name):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True)
-    parser.add_argument("--campaign", help="campaign id (default: GTA_CAMPAIGN or kreekcraft)")
+    parser.add_argument("--campaign", required=True, help="campaign id (required): " + " | ".join(ids()))
     parser.add_argument("--start", type=float, default=0.0,
                         help="start of the confirmed gameplay range")
     parser.add_argument("--timeline", default=None)

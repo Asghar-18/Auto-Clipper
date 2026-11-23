@@ -14,6 +14,8 @@ import numpy as np
 
 import clip
 
+from campaigns import ids
+
 from . import config, gameplay, source as source_module
 
 
@@ -176,7 +178,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--file", help="local sample video (fast pipeline tests)")
     parser.add_argument("--url", help="authorized VOD URL for the active campaign")
-    parser.add_argument("--campaign", help="campaign id (default: GTA_CAMPAIGN or kreekcraft)")
+    parser.add_argument("--campaign", required=True, help="campaign id (required): " + " | ".join(ids()))
     parser.add_argument("--clip-len", type=float, default=config.DEFAULT_CLIP_LEN)
     parser.add_argument("--lead-in", type=float, default=config.DEFAULT_LEAD_IN)
     parser.add_argument("--top", type=int, default=config.DEFAULT_TOP)

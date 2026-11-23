@@ -45,8 +45,8 @@ def base_meta(campaign_id, caption, thumb, approved=True, platforms=('youtube',)
 
 
 class CampaignProfileTests(unittest.TestCase):
-    def test_registry_has_two_independent_profiles(self):
-        self.assertEqual(set(ids()), {'kreekcraft', 'dylan_page'})
+    def test_registry_has_three_independent_profiles(self):
+        self.assertEqual(set(ids()), {'kreekcraft', 'dylan_page', 'boeshi'})
         kreek = get_profile('kreekcraft')
         dylan = get_profile('dylan_page')
         self.assertNotIn('twitter', kreek.publishing.platforms)
@@ -158,14 +158,13 @@ class CampaignProfileTests(unittest.TestCase):
     def test_legacy_timeline_fallback_is_kreek_only(self):
         with tempfile.TemporaryDirectory() as folder:
             Path(folder, 'abc-gameplay-timeline.json').write_text('{}', encoding='utf-8')
-            with patch.object(config, 'METADATA', folder), \
-                    patch.dict(os.environ, {'GTA_CAMPAIGN': 'kreekcraft'}):
-                self.assertTrue(config.timeline_path('abc').endswith(
+            with patch.object(config, 'METADATA', folder):
+                self.assertTrue(config.timeline_path('abc', 'kreekcraft').endswith(
                     'abc-gameplay-timeline.json'))
-            with patch.object(config, 'METADATA', folder), \
-                    patch.dict(os.environ, {'GTA_CAMPAIGN': 'dylan_page'}):
-                self.assertTrue(config.timeline_path('abc').endswith(
+                self.assertTrue(config.timeline_path('abc', 'dylan_page').endswith(
                     'dylan-abc-gameplay-timeline.json'))
+                self.assertTrue(config.timeline_path('abc', 'boeshi').endswith(
+                    'boeshi-abc-gameplay-timeline.json'))
 
     def test_legacy_campaign_inference_is_read_only(self):
         self.assertEqual(storage.infer_campaign({'campaign_id': 'dylan_page'}, 'kreek-old'),

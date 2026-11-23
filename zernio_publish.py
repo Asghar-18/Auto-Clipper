@@ -23,7 +23,7 @@ import requests
 from late.client.exceptions import LateError
 from zernio import Zernio
 
-from campaigns import get as get_profile
+from campaigns import get as get_profile, list_campaigns
 from shared import storage
 from shared.publishing import preflight
 
@@ -44,8 +44,10 @@ CAPTION_FIELDS = {
 }
 # Only these names are ever read from a local .env; real environment values win.
 ENV_NAMES = frozenset({
-    "ZERNIO_API_KEY", "LATE_API_KEY", "GTA_CAMPAIGN", "GTA_UNATTENDED_POSTS",
+    "ZERNIO_API_KEY", "LATE_API_KEY", "GTA_UNATTENDED_POSTS",
     *PLATFORM_ENV.values(),
+    # Campaign-specific account variables declared by each profile.
+    *(name for profile in list_campaigns() for name in profile.publishing.account_env.values()),
 })
 
 
@@ -384,6 +386,8 @@ def main():
         sys.exit("Choose --scheduled-for or --now before publishing.")
     if not metadata.get("approved"):
         sys.exit("Clip metadata is not approved. Review this individual clip, then set approved=true.")
+    if args.unattended and not profile.publishing.allow_unattended:
+        sys.exit(f"{profile.name} does not allow unattended publishing; publish one approved clip at a time.")
     if args.unattended and os.environ.get("GTA_UNATTENDED_POSTS") != "1":
         sys.exit("Set GTA_UNATTENDED_POSTS=1 in your private environment to use legacy unattended mode.")
 

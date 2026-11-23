@@ -10,6 +10,8 @@ import sys
 
 import clip
 
+from campaigns import ids
+
 from . import captions, config, gameplay, source as source_module
 
 
@@ -66,6 +68,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--file")
     parser.add_argument("--url")
+    parser.add_argument("--campaign", required=True, help="campaign id (required): " + " | ".join(ids()))
     parser.add_argument("--timestamps", required=True)
     parser.add_argument("--clip-len", type=float, default=config.DEFAULT_CLIP_LEN)
     parser.add_argument("--spoken-language", default="en", choices=("en", "hi", "auto"))
@@ -76,16 +79,20 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config.ensure_dirs()
     try:
-        src = source_module.resolve(file=args.file, url=args.url)
+        profile = config.active_profile(args.campaign)
+        src = source_module.resolve(file=args.file, url=args.url, campaign_id=profile.id)
         with open(args.timestamps, encoding="utf-8") as handle:
             report = json.load(handle)
+        stamped = report.get("campaign_id")
+        if stamped and stamped != profile.id:
+            raise ValueError(f"timestamps belong to campaign {stamped!r}, not {profile.id!r}")
         audio = source_module.prepare_audio(src)
         language = None if args.spoken_language == "auto" else args.spoken_language
         timeline = None
         if args.timeline or not src.is_local:
-            from .analyze import load_gameplay_timeline
-            timeline = load_gameplay_timeline(os.path.abspath(args.timeline or os.path.join(
-                config.METADATA, src.key + "-gameplay-timeline.json")))
+            from .analyze import load_gameplay_timeline, timeline_path
+            timeline = load_gameplay_timeline(timeline_path(src, args.timeline, profile.id),
+                                              profile.id)
         candidates = refine_candidates(src, audio, report, args.clip_len, language,
                                        timeline=timeline,
                                        min_coverage=args.min_gameplay_coverage,
@@ -94,8 +101,9 @@ def main(argv=None):
         sys.exit(str(error))
     refined = dict(report)
     refined["stage"] = "refine"
+    refined["campaign_id"] = profile.id
     refined["candidates"] = candidates
-    out = os.path.abspath(args.out or os.path.join(config.CANDIDATES, src.key + "-refined.json"))
+    out = os.path.abspath(args.out or os.path.join(config.CANDIDATES, f"{profile.clip_prefix}-{src.key}-refined.json"))
     with open(out, "w", encoding="utf-8") as handle:
         json.dump(refined, handle, indent=2, ensure_ascii=False)
     for row in candidates:

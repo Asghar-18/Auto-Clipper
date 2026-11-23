@@ -4,6 +4,7 @@ The caption rules come from the clip's campaign profile, never from a global
 constant, so a Dylan Page clip can never inherit the KreekCraft sentence or
 hashtags (and vice versa). Titles/hooks come only from the real transcript.
 """
+import hashlib
 import re
 
 from . import config
@@ -14,6 +15,14 @@ URL_PATTERN = re.compile(r"https?://|www\.", re.IGNORECASE)
 def hook_from_transcript(transcript, words=8):
     cleaned = " ".join((transcript or "").split()[:words]).strip(" ,.!?")
     return cleaned
+
+
+def pick_template(templates, clip_id):
+    """Deterministic template choice per clip, so re-runs keep the same caption."""
+    if not templates:
+        return None
+    digest = hashlib.sha256(str(clip_id or "").encode("utf-8")).hexdigest()
+    return templates[int(digest, 16) % len(templates)]
 
 
 def build(report, src, campaign_id=None):
@@ -27,6 +36,9 @@ def build(report, src, campaign_id=None):
         parts.append(rules.exact_phrase)
     if hook and rules.accurate_description_required and not rules.exact_phrase:
         parts.append(f'"{hook}"')
+    template = pick_template(rules.templates, report.get("clip_id"))
+    if template:
+        parts.append(template)
     if rules.required_hashtags:
         parts.append(" ".join(rules.required_hashtags))
     caption = "\n\n".join(part for part in parts if part)
@@ -55,6 +67,7 @@ def build(report, src, campaign_id=None):
         "caption_text": caption,
         "caption_language": report.get("caption_language") or rules.language,
         "campaign_phrase": rules.exact_phrase,
+        "caption_template": template,
         "hashtags": list(rules.required_hashtags),
         "source_url": src.get("url") or src.get("file"),
         "source_platform": source_platform,

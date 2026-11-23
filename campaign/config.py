@@ -1,13 +1,13 @@
-"""Output paths and active-campaign resolution. No credentials live here.
+"""Output paths and campaign resolution. No credentials live here.
 
-The campaign id selects all creator-specific rules. The default remains
-``kreekcraft`` so existing commands keep working unchanged; set ``GTA_CAMPAIGN``
-to ``dylan_page`` (or pass ``--campaign`` where supported) for the marathon.
+The campaign id selects all creator-specific rules. There is no default
+campaign: every command passes ``--campaign`` and stamped clips carry their own
+``campaign_id``. ``GTA_CAMPAIGN`` is no longer read.
 """
 import os
 
-from campaigns import get as get_profile, default_id
-from campaigns.registry import DEFAULT_ID
+from campaigns import get as get_profile
+from campaigns.registry import LEGACY_ID
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -21,10 +21,6 @@ LOGS = os.path.join(OUTPUT, "logs")
 WORK = os.path.join(ROOT, "work", "campaign")
 
 SUBDIRS = (CANDIDATES, FINAL, METADATA, THUMBNAILS, LOGS, WORK)
-
-CAMPAIGN_ID = default_id()
-CAMPAIGN_CAPTION = get_profile(CAMPAIGN_ID).captions.exact_phrase
-HASHTAGS = get_profile(CAMPAIGN_ID).captions.required_hashtags
 
 DEFAULT_CLIP_LEN = 30
 DEFAULT_LEAD_IN = 6
@@ -42,9 +38,9 @@ def ensure_dirs():
         os.makedirs(folder, exist_ok=True)
 
 
-def active_profile(campaign_id=None):
-    """Return the profile for an explicit id or the GTA_CAMPAIGN environment."""
-    return get_profile(campaign_id or os.environ.get("GTA_CAMPAIGN") or CAMPAIGN_ID)
+def active_profile(campaign_id):
+    """Return the profile for an explicit campaign id; missing/unknown ids raise."""
+    return get_profile(campaign_id)
 
 
 def logo_path(override=None, campaign_id=None):
@@ -85,7 +81,7 @@ def timeline_path(source_key: str, campaign_id: str | None = None,
     key = output_stem(source_key)
     scoped = os.path.join(METADATA, f"{profile.clip_prefix}-{key}-gameplay-timeline.json")
     legacy = os.path.join(METADATA, f"{key}-gameplay-timeline.json")
-    if (prefer_existing and profile.id == DEFAULT_ID and not os.path.isfile(scoped)
+    if (prefer_existing and profile.id == LEGACY_ID and not os.path.isfile(scoped)
             and os.path.isfile(legacy)):
         return legacy
     return scoped

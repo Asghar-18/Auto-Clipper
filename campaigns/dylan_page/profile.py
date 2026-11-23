@@ -43,10 +43,20 @@ PROFILE = CampaignProfile(
         no_added_watermarks=True,
         no_third_party_branding=True,
         original_branding_allowed=True,
+        # Operator-confirmed on 1920x1080 sources (9:8 regions, shown whole):
+        # top = webcam window + stream timer (1316,0,604,537); bottom = gameplay
+        # ending just before the webcam (101,0,1215,1080).
+        stacked_top_region=(1316 / 1920, 0.0, 604 / 1920, 537 / 1080),
+        stacked_top_overrides=(
+            # "120 Hours Marathon Best Moments" (1200,0,640,569). Excluded from the
+            # campaign set: its webcam moves between edits; burned-in subtitles.
+            ("i1zUT_gKQzA", (1200 / 1920, 0.0, 640 / 1920, 569 / 1080)),
+        ),
+        stacked_bottom_region=(101 / 1920, 0.0, 1215 / 1920, 1.0),
         notes=(
-            "Strict 9:16 vertical. A fixed upper panel crops the operator-selected "
-            "top-right source region (grid cells A3+A4+B3+B4) without panning; a lower "
-            "panel shows the full source width so gameplay stays readable. "
+            "Strict 9:16 vertical. A fixed upper panel shows the stream's webcam "
+            "window and timer without panning; a lower panel shows gameplay that "
+            "stops just before the webcam, so the face is not shown twice. "
             "The verified fit layout is the fallback when no confident face is detected. "
             "Logos already in the original footage are allowed; no added watermarks or "
             "third-party branding.",

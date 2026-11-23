@@ -22,34 +22,17 @@ MIN_FACE_AREA = 0.001       # fraction of the source frame; smaller faces are no
 MIN_FACE_SAMPLES = 8
 MIN_PRESENCE_RATIO = 0.7
 MAX_CROP_SPEED = 0.16       # fraction of scaled width per second
-# Operator-confirmed top-panel regions, as (x, y, width, height) fractions of
-# the source frame. Each is 9:8 in source pixels so the 1080x960 panel shows it
-# whole (a 16:9 region would lose its sides to the cover-crop).
-# Live marathon VODs: the stream-overlay webcam window in the top-right corner
-# plus the "time since stream start" timer above it (1316,0,604,537 on 1920x1080).
-FACEBOX_REGION = (1316 / 1920, 0.0, 604 / 1920, 537 / 1080)
-# Per-video overrides for VODs with a different overlay layout.
-FACEBOX_OVERRIDES = {
-    # "120 Hours Marathon Best Moments": larger webcam window starting further
-    # left, no timer (1200,0,640,569 on 1920x1080). Excluded from the campaign
-    # set: its webcam moves between edits and it has burned-in subtitles.
-    "i1zUT_gKQzA": (1200 / 1920, 0.0, 640 / 1920, 569 / 1080),
-}
+# Crop regions are campaign data. They live on the profile
+# (``VideoRules.stacked_top_region`` / ``stacked_top_overrides`` /
+# ``stacked_bottom_region``), so one campaign's crop can never be applied to
+# another campaign that happens to use the same layout name.
 
 
 TOP_PANEL_W = 1080
 TOP_PANEL_H = 960
 
-# Gameplay (bottom) panel source region as fractions, or None for the full
-# frame centre-cropped to 9:8 (source x ~352-1568, which also catches part of
-# the webcam overlay at the right edge). Operator-confirmed: 101,0,1215,1080
-# on 1920x1080 -- full height, 9:8, ending at x=1316 just before the webcam.
-GAMEPLAY_REGION = (101 / 1920, 0.0, 1215 / 1920, 1.0)
-
-
-def gameplay_box(width, height, region=None):
+def gameplay_box(width, height, region):
     """Source-pixel ``(x, y, w, h)`` for the bottom panel, or None for centre crop."""
-    region = GAMEPLAY_REGION if region is None else region
     if region is None:
         return None
     fx, fy, fw, fh = region
@@ -63,9 +46,9 @@ def bottom_panel_chain(box=None):
             f"crop={TOP_PANEL_W}:{TOP_PANEL_H}")
 
 
-def facebox_region(video_id=None):
-    """Fractional top-panel region for ``video_id`` (default: live-VOD region)."""
-    return FACEBOX_OVERRIDES.get(video_id, FACEBOX_REGION)
+def facebox_region(rules, video_id=None):
+    """Fractional top-panel region from a profile's ``VideoRules`` (None if unset)."""
+    return dict(rules.stacked_top_overrides).get(video_id, rules.stacked_top_region)
 
 
 def source_dimensions(video_path):
@@ -142,15 +125,19 @@ def build_filter(ass_name, keys):
             f"ass={ass_name}[out]")
 
 
-def facecam_box(video_path, start, length, sample_interval=SAMPLE_INTERVAL, video_id=None):
-    """Return the operator-confirmed fixed region as ``(x, y, w, h)`` pixels.
+def facecam_box(video_path, start, length, rules, sample_interval=SAMPLE_INTERVAL,
+                video_id=None):
+    """Return the profile's operator-confirmed fixed region as ``(x, y, w, h)`` pixels.
 
-    Uses ``FACEBOX_OVERRIDES[video_id]`` when present, else ``FACEBOX_REGION``.
-    It never pans or resizes. Face sampling still gates whether the stacked
-    layout is used at all, but it does not move this crop.
+    Uses the profile's per-video override when present, else its default
+    region; returns None when the profile defines no region (callers then fall
+    back to the fit layout). It never pans or resizes.
     """
+    region = facebox_region(rules, video_id)
+    if region is None:
+        return None
     width, height = source_dimensions(video_path)
-    fx, fy, fw, fh = facebox_region(video_id)
+    fx, fy, fw, fh = region
     return (int(width * fx), int(height * fy),
             int(width * fw), int(height * fh))
 

@@ -22,6 +22,8 @@ import numpy as np
 
 import clip
 
+from campaigns import ids
+
 from . import config, source as source_module
 
 TILE_W, TILE_H = 160, 90
@@ -342,7 +344,7 @@ def is_gameplay_window(start, end, timeline, min_coverage=95.0, max_static=20.0,
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True)
-    parser.add_argument("--campaign", help="campaign id (default: GTA_CAMPAIGN or kreekcraft)")
+    parser.add_argument("--campaign", required=True, help="campaign id (required): " + " | ".join(ids()))
     parser.add_argument("--out", default=None)
     parser.add_argument("--range-start", type=float, help="dense contact sheet from this source second")
     parser.add_argument("--range-end", type=float, help="dense contact sheet to this source second")
@@ -392,7 +394,7 @@ def main(argv=None):
             previous = json.load(handle)
         stamped = previous.get("campaign_id")
         legacy_kreek = not stamped and os.path.basename(out).startswith(
-            profile.clip_prefix + "-") and profile.id == config.DEFAULT_ID
+            profile.clip_prefix + "-") and profile.id == config.LEGACY_ID
         same_campaign = stamped == profile.id or legacy_kreek
         if same_campaign and previous.get("confirmed_segments") and not segments:
             timeline["confirmed_segments"] = previous["confirmed_segments"]

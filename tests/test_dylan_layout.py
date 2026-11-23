@@ -132,9 +132,10 @@ class DylanLayoutTests(unittest.TestCase):
 
     def test_confirmed_regions_are_9x8_and_fully_visible(self):
         with patch.object(dylan_layout, 'source_dimensions', return_value=(1920, 1080)):
-            live = dylan_layout.facecam_box('s.mp4', 0, 30, video_id='xFcI47X15Lo')
-            best = dylan_layout.facecam_box('s.mp4', 0, 30, video_id='i1zUT_gKQzA')
-            default = dylan_layout.facecam_box('s.mp4', 0, 30)
+            rules = get_profile('dylan_page').video
+            live = dylan_layout.facecam_box('s.mp4', 0, 30, rules, video_id='xFcI47X15Lo')
+            best = dylan_layout.facecam_box('s.mp4', 0, 30, rules, video_id='i1zUT_gKQzA')
+            default = dylan_layout.facecam_box('s.mp4', 0, 30, rules)
         self.assertEqual(live, (1316, 0, 604, 537))
         self.assertEqual(default, live)
         self.assertEqual(best, (1200, 0, 640, 569))
@@ -155,9 +156,10 @@ class DylanLayoutTests(unittest.TestCase):
         self.assertIn('[game]crop=1215:1080:101:0,', graph)
 
     def test_gameplay_region_crops_bottom_panel_only_when_set(self):
-        box = dylan_layout.gameplay_box(1920, 1080)   # confirmed default
-        self.assertEqual(box, dylan_layout.gameplay_box(
-            1920, 1080, (101 / 1920, 0.0, 1215 / 1920, 1.0)))
+        rules = get_profile('dylan_page').video
+        self.assertIsNone(dylan_layout.gameplay_box(1920, 1080, None))
+        box = dylan_layout.gameplay_box(1920, 1080, rules.stacked_bottom_region)
+        self.assertEqual(box, (101, 0, 1215, 1080))
         self.assertEqual(box, (101, 0, 1215, 1080))
         self.assertLessEqual(box[0] + box[2], 1316)   # stops before the webcam window
         graph = dylan_layout.build_stacked_filter('c.ass', (1316, 0, 604, 537), box)

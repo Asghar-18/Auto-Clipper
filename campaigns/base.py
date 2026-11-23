@@ -32,6 +32,8 @@ class SourcePolicy:
     forbidden_channels: tuple[str, ...] = ()
     topic: str = "GTA VI gameplay"
     start_date: str | None = None          # YYYY-MM-DD; marathon/series start
+    # True: a missing start_date fails validation instead of skipping the check.
+    start_date_required: bool = False
     require_url: bool = True
     allow_local_tests: bool = True
     reject_unofficial_reuploads: bool = True
@@ -53,6 +55,11 @@ class VideoRules:
     no_added_watermarks: bool = False
     no_third_party_branding: bool = False
     original_branding_allowed: bool = True
+    # Stacked-layout crops as (x, y, w, h) fractions of the source frame. Owned
+    # by the profile so no other campaign can inherit them.
+    stacked_top_region: tuple[float, float, float, float] | None = None
+    stacked_top_overrides: tuple[tuple[str, tuple[float, float, float, float]], ...] = ()
+    stacked_bottom_region: tuple[float, float, float, float] | None = None
     notes: tuple[str, ...] = ()
 
 
@@ -75,6 +82,12 @@ class EditingRules:
 @dataclass(frozen=True)
 class CaptionRules:
     exact_phrase: str | None = None
+    # Text every caption must contain (e.g. a creator link), checked
+    # case-insensitively. Allowed even when urls_forbidden is False.
+    required_substrings: tuple[str, ...] = ()
+    # Caption lines the generator rotates through; each must contain every
+    # required substring (enforced by tests).
+    templates: tuple[str, ...] = ()
     required_hashtags: tuple[str, ...] = ()
     forbidden_hashtags: tuple[str, ...] = ()
     forbidden_phrases: tuple[str, ...] = ()
@@ -104,6 +117,8 @@ class PublishingRules:
     min_tier1_audience_pct: float | None = None
     tier1_countries: tuple[str, ...] = ()
     no_engagement_manipulation: bool = True
+    # False: zernio_publish refuses --unattended for this campaign outright.
+    allow_unattended: bool = True
     notes: tuple[str, ...] = ()
 
 
@@ -144,6 +159,12 @@ class CampaignProfile:
             checks.append(rule_check(
                 "exact_campaign_phrase", self.captions.exact_phrase in text,
                 self.captions.exact_phrase))
+        if self.captions.required_substrings:
+            absent = [item for item in self.captions.required_substrings
+                      if item.lower() not in text.lower()]
+            checks.append(rule_check(
+                "required_caption_text_present", not absent,
+                f"missing: {absent}" if absent else "all present"))
         missing = [tag for tag in self.captions.required_hashtags if tag not in text]
         checks.append(rule_check(
             "required_hashtags_present", not missing,
@@ -152,7 +173,8 @@ class CampaignProfile:
         checks.append(rule_check(
             "foreign_hashtags_absent", not wrong,
             f"foreign tags: {wrong}" if wrong else "none"))
-        borrowed = [phrase for phrase in self.captions.forbidden_phrases if phrase in text]
+        borrowed = [phrase for phrase in self.captions.forbidden_phrases
+                    if phrase.lower() in text.lower()]
         checks.append(rule_check(
             "foreign_caption_phrase_absent", not borrowed,
             f"foreign phrases: {borrowed}" if borrowed else "none"))
@@ -198,6 +220,10 @@ class CampaignProfile:
                 source_platform in self.source.platforms,
                 source_platform or "not stated in metadata; manual review",
                 manual_review=not source_platform))
+        if not self.source.start_date and self.source.start_date_required:
+            checks.append(rule_check(
+                "source_within_campaign_window", False,
+                "campaign cutoff date not configured in the profile yet"))
         if self.source.start_date:
             date = str(src.get("upload_date") or "")
             if len(date) == 8 and date.isdigit():

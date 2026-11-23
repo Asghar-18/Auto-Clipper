@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 
 import clip
 
+from campaigns import ids
+
 from . import captions, config, dylan_layout, source as source_module
 
 
@@ -74,10 +76,12 @@ def compose_filter(profile, ass_name, media_path, start, length, has_logo=False,
         keys = dylan_layout.adaptive_keys(media_path, start, length)
         if keys:
             if profile.video.layout == "adaptive-stacked":
-                box = dylan_layout.facecam_box(media_path, start, length, video_id=video_id)
+                box = dylan_layout.facecam_box(media_path, start, length, profile.video,
+                                               video_id=video_id)
                 if box:
                     game_box = dylan_layout.gameplay_box(
-                        *dylan_layout.source_dimensions(media_path))
+                        *dylan_layout.source_dimensions(media_path),
+                        profile.video.stacked_bottom_region)
                     return dylan_layout.build_stacked_filter(ass_name, box, game_box), True
             else:
                 return dylan_layout.build_filter(ass_name, keys), True
@@ -166,7 +170,7 @@ def render_candidate(src, media_path, candidate, logo, out_dir, spoken_language=
                      else "fit-fallback" if profile.video.layout in ("adaptive-face", "adaptive-stacked")
                      else "fit"),
             "identity_verified": False,
-            "top_panel_region": (list(dylan_layout.facebox_region(src.key))
+            "top_panel_region": (list(dylan_layout.facebox_region(profile.video, src.key))
                                  if adaptive and profile.video.layout == "adaptive-stacked"
                                  else None),
             "note": ("tight fixed facecam panel over wide gameplay; manual identity/focus review required"
@@ -196,7 +200,7 @@ def main(argv=None):
     parser.add_argument("--start", type=float, help="override candidate start (source seconds)")
     parser.add_argument("--length", type=float, help="override clip length")
     parser.add_argument("--logo", help="override official logo PNG path (logo campaigns only)")
-    parser.add_argument("--campaign", help="campaign id (default: GTA_CAMPAIGN or kreekcraft)")
+    parser.add_argument("--campaign", required=True, help="campaign id (required): " + " | ".join(ids()))
     parser.add_argument("--spoken-language", default="en", choices=("en", "hi", "auto"))
     parser.add_argument("--out-dir", default=None)
     args = parser.parse_args(argv)

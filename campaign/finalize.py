@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 import cv2
 import numpy as np
 
+from campaigns import ids
+
 from . import config, metadata, validate
 from shared import storage, thumbnails as thumbnail_module
 
@@ -353,7 +355,7 @@ def review_status(argv=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--campaign", help="campaign id (default: GTA_CAMPAIGN or kreekcraft)")
+    parser.add_argument("--campaign", required=True, help="campaign id (required): " + " | ".join(ids()))
     parser.add_argument("--candidate", action="append", default=[],
                         help="render JSON from campaign.render (repeatable)")
     parser.add_argument("--candidates-from", action="append", default=[],

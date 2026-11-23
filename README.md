@@ -1,6 +1,6 @@
 # GTA Auto Clipper
 
-Find high-energy moments in live gameplay and render full-screen 9:16 clips with pop-up captions: each word pops in yellow the moment it is spoken. The clipper runs on your computer. One profile-driven pipeline serves two independent campaigns (KreekCraft GTA 6 and Dylan Page GTA 6 Marathon). A separate Zernio command can schedule a reviewed clip to its campaign's connected TikTok, Instagram, YouTube or X accounts. See [docs/CAMPAIGNS.md](docs/CAMPAIGNS.md).
+Find high-energy moments in live gameplay and render full-screen 9:16 clips with pop-up captions: each word pops in yellow the moment it is spoken. The clipper runs on your computer. One profile-driven pipeline serves three independent campaigns (KreekCraft GTA 6, Dylan Page GTA 6 Marathon, and Boeshi GTA 6, a draft that cannot publish yet). A separate Zernio command can schedule a reviewed clip to its campaign's connected TikTok, Instagram, YouTube or X accounts. See [docs/CAMPAIGNS.md](docs/CAMPAIGNS.md).
 
 The software is free and MIT-licensed. The optional AI workflow guide and prompt pack are a separate digital product.
 
@@ -74,11 +74,11 @@ python clip.py --file "C:\videos\gameplay.mp4" --test --clip-len 30
 ## Campaigns
 
 The VOD pipeline keeps creator rules separate in `campaigns/`. A clip belongs to
-exactly one campaign (`kreekcraft` or `dylan_page`); campaign stamps, source
+exactly one campaign (`kreekcraft`, `dylan_page` or `boeshi`); campaign stamps, source
 caches, gameplay timelines, filenames and exclusion ranges are isolated.
 
 ```powershell
-$env:GTA_CAMPAIGN = "dylan_page"   # omit for the default kreekcraft campaign
+# --campaign is required on every command; there is no default campaign
 python -m campaign.gameplay --url "VIDEO_URL" --campaign dylan_page
 python -m campaign.analyze --url "VIDEO_URL" --campaign dylan_page --start 0
 python -m campaign.select --url "VIDEO_URL" --campaign dylan_page --start 0 --top 5
